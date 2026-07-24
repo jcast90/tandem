@@ -67,7 +67,7 @@ export async function runWorker(taskId: string): Promise<number> {
     }
 
     if (result.report.status === "completed") {
-      const commitSha = await commitWorktree(task.worktreePath, task.objective);
+      const commitSha = await commitWorktree(task.worktreePath, task.objective, task.repoRoot);
       store.updateTask(task.id, {
         status: "completed",
         providerSessionId: result.sessionId,

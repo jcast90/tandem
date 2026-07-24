@@ -156,7 +156,8 @@ Operating contract:
 - Work only inside the current Git worktree.
 - Read and follow repository instructions such as AGENTS.md and CLAUDE.md.
 - Implement the requested change, run proportionate verification, and leave all useful changes in the worktree.
-- Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps.
+- Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps and will commit after your report.
+- If the work order asks for a commit, interpret that as leaving the requested changes ready for Tandem to commit. Do not run git commit yourself.
 - Do not broaden the objective. If a material product decision or missing authority blocks safe execution, stop and report status "blocked" with concise questions.
 - Report concrete evidence and the exact tests or checks run.
 - Your final response must satisfy the supplied JSON schema.`;

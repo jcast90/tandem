@@ -47,13 +47,29 @@ export async function prepareWorktree(cwd: string, key: string): Promise<Prepare
 
 export async function commitWorktree(
   worktreePath: string,
-  objective: string
+  objective: string,
+  repoRoot?: string
 ): Promise<string | null> {
   const status = await runCommand("git", ["status", "--porcelain"], { cwd: worktreePath });
   if (status.exitCode !== 0) {
     throw new Error(status.stderr || "Unable to inspect worker changes.");
   }
-  if (!status.stdout.trim()) return null;
+  if (!status.stdout.trim()) {
+    if (!repoRoot) return null;
+    const baseHead = await runCommand("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+    if (baseHead.exitCode !== 0) {
+      throw new Error(baseHead.stderr || "Unable to resolve the source repository HEAD.");
+    }
+    const workerCommit = await runCommand(
+      "git",
+      ["rev-list", "--max-count=1", "HEAD", "--not", baseHead.stdout.trim()],
+      { cwd: worktreePath }
+    );
+    if (workerCommit.exitCode !== 0) {
+      throw new Error(workerCommit.stderr || "Unable to inspect worker-created commits.");
+    }
+    return workerCommit.stdout.trim() || null;
+  }
 
   const add = await runCommand("git", ["add", "-A"], { cwd: worktreePath });
   if (add.exitCode !== 0) {

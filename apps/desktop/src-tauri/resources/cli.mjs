@@ -4415,7 +4415,8 @@ Operating contract:
 - Work only inside the current Git worktree.
 - Read and follow repository instructions such as AGENTS.md and CLAUDE.md.
 - Implement the requested change, run proportionate verification, and leave all useful changes in the worktree.
-- Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps.
+- Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps and will commit after your report.
+- If the work order asks for a commit, interpret that as leaving the requested changes ready for Tandem to commit. Do not run git commit yourself.
 - Do not broaden the objective. If a material product decision or missing authority blocks safe execution, stop and report status "blocked" with concise questions.
 - Report concrete evidence and the exact tests or checks run.
 - Your final response must satisfy the supplied JSON schema.`;
@@ -4929,12 +4930,27 @@ async function prepareWorktree(cwd, key) {
   }
   return { repoRoot, path, branch };
 }
-async function commitWorktree(worktreePath, objective) {
+async function commitWorktree(worktreePath, objective, repoRoot) {
   const status2 = await runCommand("git", ["status", "--porcelain"], { cwd: worktreePath });
   if (status2.exitCode !== 0) {
     throw new Error(status2.stderr || "Unable to inspect worker changes.");
   }
-  if (!status2.stdout.trim()) return null;
+  if (!status2.stdout.trim()) {
+    if (!repoRoot) return null;
+    const baseHead = await runCommand("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+    if (baseHead.exitCode !== 0) {
+      throw new Error(baseHead.stderr || "Unable to resolve the source repository HEAD.");
+    }
+    const workerCommit = await runCommand(
+      "git",
+      ["rev-list", "--max-count=1", "HEAD", "--not", baseHead.stdout.trim()],
+      { cwd: worktreePath }
+    );
+    if (workerCommit.exitCode !== 0) {
+      throw new Error(workerCommit.stderr || "Unable to inspect worker-created commits.");
+    }
+    return workerCommit.stdout.trim() || null;
+  }
   const add = await runCommand("git", ["add", "-A"], { cwd: worktreePath });
   if (add.exitCode !== 0) {
     throw new Error(add.stderr || "Unable to stage worker changes.");
@@ -5146,7 +5162,7 @@ async function runWorker(taskId) {
       store.appendEvent(task.id, "worker.usage", result.usage);
     }
     if (result.report.status === "completed") {
-      const commitSha = await commitWorktree(task.worktreePath, task.objective);
+      const commitSha = await commitWorktree(task.worktreePath, task.objective, task.repoRoot);
       store.updateTask(task.id, {
         status: "completed",
         providerSessionId: result.sessionId,
