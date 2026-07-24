@@ -1,7 +1,8 @@
 # Tandem
 
-Tandem is a local, provider-neutral CLI harness for pairing one conversational
-agent with one or more execution workers.
+Tandem is a local, provider-neutral harness for pairing one conversational agent
+with one or more execution workers. It includes a terminal CLI and an early
+macOS desktop app.
 
 The initial profile uses:
 
@@ -19,9 +20,52 @@ of truth.
 ## Status
 
 This is a working `0.1.0` vertical slice, not a production-ready autonomous
-agent platform. It intentionally starts with two CLI adapters while keeping
-roles, providers, transports, models, and session runtimes separate in the
-domain model.
+agent platform. The CLI orchestration path and desktop conversation path both
+work. It intentionally starts with two subscription-backed CLI adapters while
+keeping roles, providers, transports, models, and session runtimes separate in
+the domain model.
+
+## Desktop app
+
+The Tandem desktop app is a calm project-and-chat interface over the same local
+orchestration core:
+
+- Codex owns the outer conversation through the authenticated Codex CLI
+  `app-server`.
+- Claude remains the bounded execution worker through the authenticated Claude
+  CLI.
+- Projects contain chats in the sidebar.
+- Worker activity stays behind an on-demand panel rather than turning the app
+  into an IDE or monitoring dashboard.
+- No OpenAI or Anthropic API key is requested, and the app does not use an API
+  billing path.
+
+The Codex `app-server` protocol is currently experimental. Tandem keeps its
+protocol client isolated under `apps/desktop/src/lib/codex.ts` so it can be
+updated without changing the UI or orchestration ledger.
+
+Run the desktop app from source:
+
+```bash
+pnpm install
+pnpm build
+pnpm desktop
+```
+
+Build a local macOS application:
+
+```bash
+pnpm desktop:build
+```
+
+The `.app` is produced under:
+
+```text
+apps/desktop/src-tauri/target/release/bundle/macos/Tandem.app
+```
+
+The bundle includes Tandem's MCP and worker runners. Codex CLI, Claude CLI, and
+Node.js still come from the user's authenticated local installation.
 
 ## Requirements
 

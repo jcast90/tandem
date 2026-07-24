@@ -50,7 +50,8 @@ export async function selectRuntime(
 
 export async function launchWorker(task: TaskRecord, requested: Runtime): Promise<RuntimeLaunch> {
   const selected = await selectRuntime(requested);
-  const runnerArgs = [join(packageRoot(), "dist", "cli.js"), "worker-run", task.id];
+  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? join(packageRoot(), "dist", "cli.js");
+  const runnerArgs = [runnerEntry, "worker-run", task.id];
   const runnerEnv: NodeJS.ProcessEnv = {
     ...process.env,
     TANDEM_HOME: tandemHome(),

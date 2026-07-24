@@ -14,9 +14,13 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "desktop": "pnpm --dir apps/desktop tauri dev",
+    "desktop:build": "pnpm --dir apps/desktop tauri build",
+    "desktop:resources": "pnpm --dir apps/desktop exec esbuild ../../src/mcp-server.ts --bundle --platform=node --format=esm --target=node22 --outfile=src-tauri/resources/mcp-server.mjs && pnpm --dir apps/desktop exec esbuild ../../src/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=src-tauri/resources/cli.mjs",
+    "desktop:web": "pnpm --dir apps/desktop dev:web",
     "dev": "tsx src/cli.ts",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"*.md\" \"*.json\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"*.md\" \"*.json\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/*.{ts,json,html}\" \"*.md\" \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/*.{ts,json,html}\" \"*.md\" \"*.json\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
