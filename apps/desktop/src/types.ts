@@ -49,6 +49,34 @@ export interface TaskEvent {
   createdAt: string;
 }
 
+export interface TaskFile {
+  path: string;
+  absolutePath: string;
+  additions: number | null;
+  deletions: number | null;
+  status: string;
+}
+
+export interface FilePreview {
+  path: string;
+  content: string;
+  truncated: boolean;
+  line?: number;
+}
+
+export interface SkillOption {
+  name: string;
+  path: string;
+  description: string;
+  scope: string;
+}
+
+export interface PluginOption {
+  id: string;
+  name: string;
+  displayName: string;
+}
+
 export interface Bootstrap {
   tandemHome: string;
   projectRoot: string;

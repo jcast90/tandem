@@ -81,6 +81,24 @@ struct TaskEventView {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TaskFileView {
+    path: String,
+    absolute_path: String,
+    additions: Option<u32>,
+    deletions: Option<u32>,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilePreview {
+    path: String,
+    content: String,
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Bootstrap {
     tandem_home: String,
     project_root: String,
@@ -268,6 +286,145 @@ fn desktop_tasks() -> Vec<TaskView> {
 }
 
 #[tauri::command]
+fn desktop_task_cancel(task_id: String, app: tauri::AppHandle) -> Result<TaskView, String> {
+    run_tandem_task_command(&app, &["task", "cancel", &task_id])?;
+    find_task(&task_id)
+}
+
+#[tauri::command]
+fn desktop_task_steer(
+    task_id: String,
+    message: String,
+    app: tauri::AppHandle,
+) -> Result<TaskView, String> {
+    if message.trim().is_empty() {
+        return Err("Steering guidance cannot be empty.".into());
+    }
+    run_tandem_task_command(&app, &["task", "steer", &task_id, message.trim()])?;
+    find_task(&task_id)
+}
+
+#[tauri::command]
+fn desktop_task_files(task_id: String) -> Result<Vec<TaskFileView>, String> {
+    let task = find_task(&task_id)?;
+    let worktree = PathBuf::from(&task.worktree_path);
+    let mut files = Vec::<TaskFileView>::new();
+    let output = if let Some(commit) = &task.commit_sha {
+        Command::new("git")
+            .args([
+                "-C",
+                &task.worktree_path,
+                "show",
+                "--numstat",
+                "--format=",
+                commit,
+            ])
+            .output()
+    } else {
+        Command::new("git")
+            .args(["-C", &task.worktree_path, "diff", "--numstat", "HEAD"])
+            .output()
+    }
+    .map_err(|error| format!("Could not inspect task files: {error}"))?;
+    if output.status.success() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut fields = line.splitn(3, '\t');
+            let additions = fields.next().and_then(|value| value.parse::<u32>().ok());
+            let deletions = fields.next().and_then(|value| value.parse::<u32>().ok());
+            let Some(path) = fields.next() else { continue };
+            files.push(TaskFileView {
+                path: path.into(),
+                absolute_path: worktree.join(path).to_string_lossy().into_owned(),
+                additions,
+                deletions,
+                status: if task.commit_sha.is_some() {
+                    "committed"
+                } else {
+                    "modified"
+                }
+                .into(),
+            });
+        }
+    }
+
+    if task.commit_sha.is_none() {
+        let status = Command::new("git")
+            .args(["-C", &task.worktree_path, "status", "--porcelain"])
+            .output()
+            .map_err(|error| format!("Could not inspect task status: {error}"))?;
+        if status.status.success() {
+            for line in String::from_utf8_lossy(&status.stdout).lines() {
+                if line.len() < 4 {
+                    continue;
+                }
+                let path = line[3..].trim();
+                let path = path.split(" -> ").last().unwrap_or(path);
+                if files.iter().any(|file| file.path == path) {
+                    continue;
+                }
+                files.push(TaskFileView {
+                    path: path.into(),
+                    absolute_path: worktree.join(path).to_string_lossy().into_owned(),
+                    additions: None,
+                    deletions: None,
+                    status: line[..2].trim().into(),
+                });
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[tauri::command]
+fn preview_local_file(path: String, project_root: String) -> Result<FilePreview, String> {
+    let canonical = allowed_local_path(&path, &project_root)?;
+    if !canonical.is_file() {
+        return Err("That path is not a file.".into());
+    }
+    const LIMIT: usize = 1_000_000;
+    let bytes = fs::read(&canonical).map_err(|error| format!("Could not read file: {error}"))?;
+    if bytes.iter().take(8_192).any(|byte| *byte == 0) {
+        return Err("Binary files cannot be previewed in Tandem.".into());
+    }
+    let truncated = bytes.len() > LIMIT;
+    let content = String::from_utf8_lossy(&bytes[..bytes.len().min(LIMIT)]).into_owned();
+    Ok(FilePreview {
+        path: canonical.to_string_lossy().into_owned(),
+        content,
+        truncated,
+    })
+}
+
+#[tauri::command]
+fn open_local_file(path: String, project_root: String) -> Result<(), String> {
+    let canonical = allowed_local_path(&path, &project_root)?;
+    Command::new("/usr/bin/open")
+        .arg(&canonical)
+        .spawn()
+        .map_err(|error| format!("Could not open file: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn open_project_terminal(path: String, project_root: String) -> Result<(), String> {
+    let canonical = allowed_local_path(&path, &project_root)?;
+    let directory = if canonical.is_dir() {
+        canonical
+    } else {
+        canonical
+            .parent()
+            .ok_or("Could not locate the file's folder.")?
+            .to_path_buf()
+    };
+    Command::new("/usr/bin/open")
+        .args(["-a", "Terminal"])
+        .arg(directory)
+        .spawn()
+        .map_err(|error| format!("Could not open Terminal: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn start_codex(
     project_root: String,
     force_restart: Option<bool>,
@@ -420,6 +577,61 @@ fn runtime_assets(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> 
         .map_err(|error| format!("Could not locate Tandem desktop resources: {error}"))?;
     let resources = resource_dir.join("resources");
     Ok((resources.join("mcp-server.mjs"), resources.join("cli.mjs")))
+}
+
+fn run_tandem_task_command(app: &tauri::AppHandle, args: &[&str]) -> Result<(), String> {
+    let node = resolve_command("node").ok_or("Node.js was not found.")?;
+    let (_, cli) = runtime_assets(app)?;
+    if !cli.exists() {
+        return Err("Tandem desktop resources are incomplete. Rebuild the app.".into());
+    }
+    let output = Command::new(&node)
+        .arg(&cli)
+        .args(args)
+        .env("PATH", command_path(&node))
+        .env("TANDEM_HOME", tandem_home())
+        .output()
+        .map_err(|error| format!("Could not run Tandem task action: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("Tandem task action failed with {}.", output.status)
+        } else {
+            detail
+        });
+    }
+    Ok(())
+}
+
+fn find_task(task_id: &str) -> Result<TaskView, String> {
+    read_tasks(&tandem_home())
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| format!("Task not found: {task_id}"))
+}
+
+fn allowed_local_path(path: &str, project_root: &str) -> Result<PathBuf, String> {
+    let canonical = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| format!("File is unavailable: {error}"))?;
+    let project = PathBuf::from(project_root).canonicalize().ok();
+    let mut allowed = project
+        .as_ref()
+        .is_some_and(|root| canonical.starts_with(root));
+    if !allowed {
+        allowed = read_tasks(&tandem_home()).iter().any(|task| {
+            PathBuf::from(&task.worktree_path)
+                .canonicalize()
+                .ok()
+                .is_some_and(|root| canonical.starts_with(root))
+        });
+    }
+    if !allowed {
+        return Err(
+            "Tandem only opens files inside the selected project or a task worktree.".into(),
+        );
+    }
+    Ok(canonical)
 }
 
 fn default_runtime() -> String {
@@ -878,8 +1090,14 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
+            desktop_task_cancel,
+            desktop_task_files,
+            desktop_task_steer,
             desktop_tasks,
+            open_local_file,
+            open_project_terminal,
             open_provider_login,
+            preview_local_file,
             reveal_connection_log,
             save_desktop_settings,
             start_codex

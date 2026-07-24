@@ -4334,6 +4334,8 @@ var ClaudeCliWorkerAdapter = class {
     const effort = stringSetting(profile, "effort");
     const args2 = [
       "-p",
+      "--input-format",
+      "stream-json",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -4346,13 +4348,13 @@ var ClaudeCliWorkerAdapter = class {
     ];
     if (profile.model) args2.push("--model", profile.model);
     if (effort) args2.push("--effort", effort);
-    args2.push(buildWorkerPrompt(task));
     const child = spawn2(executable, args2, {
       cwd: task.worktreePath,
       env: sanitizeWorkerEnv(process.env),
       stdio: "pipe"
     });
     this.child = child;
+    child.stdin.write(streamingUserMessage(buildWorkerPrompt(task)));
     let resultEvent = null;
     let stderr = "";
     let writeTail = Promise.resolve();
@@ -4364,7 +4366,10 @@ var ClaudeCliWorkerAdapter = class {
 `));
       const event = safeJsonObject(line);
       if (!event) return;
-      if (event.type === "result") resultEvent = event;
+      if (event.type === "result") {
+        resultEvent = event;
+        child.stdin.end();
+      }
       const activity = extractActivity(event);
       if (activity) hooks.onActivity("worker.activity", activity);
     });
@@ -4393,10 +4398,28 @@ var ClaudeCliWorkerAdapter = class {
       usage: isObject(resultEvent.usage) ? resultEvent.usage : null
     };
   }
+  steer(message) {
+    const text = message.trim();
+    if (!text) throw new Error("Steering guidance cannot be empty.");
+    if (!this.child || !this.child.stdin.writable) {
+      throw new Error("The Claude worker is no longer accepting guidance.");
+    }
+    this.child.stdin.write(streamingUserMessage(text));
+  }
   cancel() {
     this.child?.kill("SIGTERM");
   }
 };
+function streamingUserMessage(text) {
+  return `${JSON.stringify({
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "text", text }]
+    }
+  })}
+`;
+}
 function buildWorkerPrompt(task) {
   const acceptance = task.acceptanceCriteria.length > 0 ? task.acceptanceCriteria.map((item, index) => `${index + 1}. ${item}`).join("\n") : "No explicit criteria were supplied. Infer conservative, testable criteria from the objective.";
   const context = task.context.length > 0 ? task.context.map((item) => `- ${item}`).join("\n") : "- Inspect the repository and its local instructions.";
@@ -5085,6 +5108,17 @@ var TandemService = class {
     this.store.appendEvent(task.id, "task.canceled", { pid: task.pid });
     return canceled;
   }
+  steerTask(taskId, message) {
+    const task = this.store.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (!["queued", "preparing", "running"].includes(task.status)) {
+      throw new Error(`Task ${task.id.slice(0, 8)} is not accepting guidance.`);
+    }
+    const guidance = message.trim();
+    if (!guidance) throw new Error("Steering guidance cannot be empty.");
+    this.store.appendEvent(task.id, "task.steer.requested", { message: guidance });
+    return task;
+  }
   async applyTask(taskId) {
     const task = this.store.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
@@ -5124,6 +5158,32 @@ async function runWorker(taskId) {
   const profile = resolveProfile(config, task.profileId);
   const adapter = createWorkerAdapter(profile);
   let interrupted = false;
+  let steerCursor = 0;
+  let steeringBusy = false;
+  const steeringInterval = setInterval(() => {
+    if (steeringBusy || interrupted) return;
+    steeringBusy = true;
+    try {
+      const events = store.listEvents(task.id, steerCursor);
+      for (const event of events) {
+        steerCursor = Math.max(steerCursor, event.id);
+        if (event.type !== "task.steer.requested") continue;
+        const message = event.payload.message;
+        if (typeof message !== "string" || !message.trim()) continue;
+        try {
+          adapter.steer(message);
+          store.appendEvent(task.id, "worker.steered", { message });
+        } catch (error) {
+          store.appendEvent(task.id, "worker.steer_failed", {
+            message,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+    } finally {
+      steeringBusy = false;
+    }
+  }, 250);
   const cancel = () => {
     if (interrupted) return;
     interrupted = true;
@@ -5204,6 +5264,7 @@ async function runWorker(taskId) {
     console.error(message);
     return 1;
   } finally {
+    clearInterval(steeringInterval);
     process.removeListener("SIGTERM", cancel);
     process.removeListener("SIGINT", cancel);
     store.close();
@@ -5489,6 +5550,13 @@ async function taskCommand(rawArgs) {
       console.log(JSON.stringify(service.cancelTask(requireArg(rawArgs, 0, "task id")), null, 2));
       return;
     }
+    if (subcommand === "steer") {
+      const id = requireArg(rawArgs, 0, "task id");
+      const message = rawArgs.slice(1).join(" ").trim();
+      if (!message) throw new Error("Usage: tandem task steer <task-id> <guidance>");
+      console.log(JSON.stringify(service.steerTask(id, message), null, 2));
+      return;
+    }
     throw new Error(`Unknown task command: ${subcommand}`);
   } finally {
     service.close();
@@ -5568,6 +5636,7 @@ Usage:
   tandem task list [--status <status>]
   tandem task show <task-id>
   tandem task watch <task-id> [--once]
+  tandem task steer <task-id> <guidance>
   tandem task cancel <task-id>
   tandem apply <completed-task-id>
 

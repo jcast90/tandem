@@ -47,6 +47,32 @@ export function SendIcon(props: IconProps) {
   );
 }
 
+export function StopIcon(props: IconProps) {
+  return (
+    <svg {...common} {...props}>
+      <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function TerminalIcon(props: IconProps) {
+  return (
+    <svg {...common} {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="m7 9 3 3-3 3M13 15h4" />
+    </svg>
+  );
+}
+
+export function FileIcon(props: IconProps) {
+  return (
+    <svg {...common} {...props}>
+      <path d="M6 3h8l4 4v14H6Z" />
+      <path d="M14 3v5h5" />
+    </svg>
+  );
+}
+
 export function ActivityIcon(props: IconProps) {
   return (
     <svg {...common} {...props}>

@@ -478,7 +478,6 @@ textarea:focus-visible {
   color: var(--ink);
   font-size: 15px;
   line-height: 1.68;
-  white-space: pre-wrap;
   text-wrap: pretty;
 }
 
@@ -488,6 +487,113 @@ textarea:focus-visible {
   border-radius: 14px;
   background: var(--surface-raised);
   line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.message.assistant .message-text > :first-child {
+  margin-top: 0;
+}
+
+.message.assistant .message-text > :last-child {
+  margin-bottom: 0;
+}
+
+.message.assistant .message-text p,
+.message.assistant .message-text ul,
+.message.assistant .message-text ol,
+.message.assistant .message-text blockquote,
+.message.assistant .message-text pre {
+  margin: 0 0 14px;
+}
+
+.message.assistant .message-text h1,
+.message.assistant .message-text h2,
+.message.assistant .message-text h3,
+.message.assistant .message-text h4 {
+  margin: 24px 0 10px;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.message.assistant .message-text h1 {
+  font-size: 21px;
+}
+
+.message.assistant .message-text h2 {
+  font-size: 18px;
+}
+
+.message.assistant .message-text h3,
+.message.assistant .message-text h4 {
+  font-size: 15px;
+}
+
+.message.assistant .message-text ul,
+.message.assistant .message-text ol {
+  padding-left: 22px;
+}
+
+.message.assistant .message-text li + li {
+  margin-top: 5px;
+}
+
+.message.assistant .message-text code,
+.file-panel code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.message.assistant .message-text :not(pre) > code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--surface-raised);
+  font-size: 0.88em;
+}
+
+.message.assistant .message-text pre {
+  overflow: auto;
+  padding: 13px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--sidebar);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.message.assistant .message-text blockquote {
+  padding-left: 13px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+
+.message.assistant .message-text a,
+.markdown-file-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: oklch(0.6 0.07 185);
+  text-underline-offset: 3px;
+}
+
+.markdown-file-link {
+  display: inline;
+  cursor: pointer;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.message.assistant .message-text table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.message.assistant .message-text th,
+.message.assistant .message-text td {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  text-align: left;
 }
 
 .worker-card {
@@ -515,6 +621,27 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.worker-stop {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.worker-stop:hover {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.worker-stop svg {
+  width: 15px;
+  height: 15px;
 }
 
 .worker-provider-mark {
@@ -567,17 +694,162 @@ textarea:focus-visible {
   margin-top: 10px;
 }
 
-.worker-progress span {
+.worker-progress button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 3px 0;
+  background: transparent;
   color: var(--muted);
   font-size: 11px;
+  text-align: left;
 }
 
-.worker-progress span::before {
+.worker-progress button::before {
   margin-right: 7px;
   color: var(--faint);
   content: "›";
 }
 
+.worker-progress button .chevron {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+}
+
+.worker-progress pre {
+  overflow: auto;
+  margin: 4px 0 7px 18px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.worker-steer {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.worker-steer input {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg);
+  font-size: 11px;
+}
+
+.worker-steer button,
+.worker-files > button,
+.file-panel-actions button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.worker-steer button:hover,
+.worker-files > button:hover,
+.file-panel-actions button:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.worker-steer button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.worker-files {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.worker-files svg {
+  width: 14px;
+  height: 14px;
+}
+
+.worker-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 7px;
+}
+
+.worker-file-list > span {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.worker-file-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+}
+
+.worker-file-list button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.worker-file-list button:hover {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.worker-file-list button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-file-list small {
+  display: inline-flex;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.worker-file-list small b {
+  color: var(--success);
+}
+
+.worker-file-list small i {
+  color: var(--danger);
+  font-style: normal;
+}
+
+.worker-file-list .file-terminal {
+  display: grid;
+  padding: 0;
+  place-items: center;
+}
 .worker-result {
   gap: 8px;
   margin-top: 10px;
@@ -728,7 +1000,7 @@ textarea:focus-visible {
 .composer {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) auto 42px;
   min-height: 98px;
   padding: 14px 12px 10px 16px;
   border: 1px solid var(--line);
@@ -773,6 +1045,180 @@ textarea:focus-visible {
   gap: 5px;
 }
 
+.skill-picker {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 0 7px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.skill-picker:hover,
+.skill-picker.active {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.skill-picker svg {
+  width: 13px;
+  height: 13px;
+}
+
+.skill-picker b {
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--ink);
+  font-size: 9px;
+}
+
+.capability-popover {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  width: min(460px, 100%);
+  max-height: min(520px, 60vh);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--sidebar);
+  box-shadow: 0 18px 50px oklch(0 0 0 / 38%);
+  animation: popover-in 140ms ease-out;
+}
+
+.capability-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px 15px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.capability-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.capability-heading strong {
+  font-size: 13px;
+}
+
+.capability-heading span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.capability-heading > button {
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.capability-list {
+  overflow: auto;
+  padding: 6px;
+}
+
+.capability-list > p {
+  margin: 0;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.capability-list > button {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.capability-list > button:hover,
+.capability-list > button.selected {
+  background: var(--surface-raised);
+}
+
+.capability-list button span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.capability-list button strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 610;
+}
+
+.capability-list button small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.capability-list button i {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.capability-list button.selected i {
+  color: var(--success);
+  font-size: 11px;
+}
+
+.connected-plugins {
+  padding: 10px 15px 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.connected-plugins > span,
+.connected-plugins small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.connected-plugins p {
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.99);
+  }
+}
+
 .provider-dot {
   width: 6px;
   height: 6px;
@@ -800,6 +1246,27 @@ textarea:focus-visible {
   transition:
     opacity 150ms ease,
     transform 150ms ease;
+}
+
+.stop-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  align-self: end;
+  cursor: pointer;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.stop-button:hover {
+  background: var(--surface-hover);
+}
+
+.stop-button svg {
+  width: 17px;
+  height: 17px;
 }
 
 .send-button:hover:not(:disabled) {
@@ -1225,6 +1692,85 @@ textarea:focus-visible {
   border-radius: 15px;
   background: var(--sidebar);
   animation: panel-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.file-panel {
+  position: fixed;
+  z-index: var(--z-panel);
+  top: 10px;
+  right: 10px;
+  bottom: 10px;
+  display: grid;
+  width: min(680px, calc(100vw - 24px));
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--sidebar);
+  animation: panel-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.file-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.file-panel-header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.file-panel-header svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.file-panel-header span {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-panel-actions {
+  display: flex;
+  gap: 7px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.file-panel-actions svg {
+  width: 14px;
+  height: 14px;
+}
+
+.file-panel pre {
+  overflow: auto;
+  margin: 0;
+  padding: 18px 20px 40px;
+  background: var(--bg);
+  color: oklch(0.86 0 0);
+  font-size: 12px;
+  line-height: 1.62;
+  white-space: pre;
+}
+
+.file-truncated {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--faint);
+  font-size: 10px;
 }
 
 .activity-header {

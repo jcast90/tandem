@@ -1,6 +1,6 @@
 import TauriWebSocket from "@tauri-apps/plugin-websocket";
 
-import type { Activity, CodexItem, CodexThread } from "../types";
+import type { Activity, CodexItem, CodexThread, PluginOption, SkillOption } from "../types";
 
 type JsonObject = Record<string, unknown>;
 
@@ -19,7 +19,8 @@ interface RpcNotification {
 export interface CodexEvents {
   onDelta: (itemId: string, delta: string) => void;
   onItem: (item: CodexItem, complete: boolean) => void;
-  onTurnComplete: () => void;
+  onTurnStarted: (turnId: string) => void;
+  onTurnComplete: (turnId: string, status: string) => void;
   onActivity: (activity: Activity) => void;
   onError: (message: string) => void;
 }
@@ -107,11 +108,77 @@ export class CodexConnection {
     return result.thread;
   }
 
-  async sendTurn(threadId: string, text: string): Promise<void> {
-    await this.request("turn/start", {
+  async listSkills(cwd: string): Promise<SkillOption[]> {
+    const result = (await this.request("skills/list", {
+      cwds: [cwd],
+      forceReload: false,
+    })) as {
+      data?: Array<{
+        skills?: Array<{
+          name: string;
+          path: string;
+          description: string;
+          scope: string;
+          enabled: boolean;
+        }>;
+      }>;
+    };
+    return (result.data ?? []).flatMap((entry) =>
+      (entry.skills ?? [])
+        .filter((skill) => skill.enabled)
+        .map(({ name, path, description, scope }) => ({ name, path, description, scope }))
+    );
+  }
+
+  async listPlugins(cwd: string): Promise<PluginOption[]> {
+    const result = (await this.request("plugin/list", {
+      cwds: [cwd],
+      marketplaceKinds: ["local"],
+    })) as {
+      marketplaces?: Array<{
+        plugins?: Array<{
+          id: string;
+          name: string;
+          installed: boolean;
+          enabled: boolean;
+          interface?: { displayName?: string | null } | null;
+        }>;
+      }>;
+    };
+    return (result.marketplaces ?? []).flatMap((marketplace) =>
+      (marketplace.plugins ?? [])
+        .filter((plugin) => plugin.installed && plugin.enabled)
+        .map((plugin) => ({
+          id: plugin.id,
+          name: plugin.name,
+          displayName: plugin.interface?.displayName || plugin.name,
+        }))
+    );
+  }
+
+  async sendTurn(threadId: string, text: string, skills: SkillOption[] = []): Promise<string> {
+    const result = (await this.request("turn/start", {
       threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      input: turnInput(text, skills),
+    })) as { turn: { id: string } };
+    return result.turn.id;
+  }
+
+  async steerTurn(
+    threadId: string,
+    turnId: string,
+    text: string,
+    skills: SkillOption[] = []
+  ): Promise<void> {
+    await this.request("turn/steer", {
+      threadId,
+      expectedTurnId: turnId,
+      input: turnInput(text, skills),
     });
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    await this.request("turn/interrupt", { threadId, turnId });
   }
 
   private async open(): Promise<void> {
@@ -216,8 +283,19 @@ export class CodexConnection {
       });
       return;
     }
+    if (message.method === "turn/started") {
+      const turn = params.turn;
+      if (isJsonObject(turn) && typeof turn.id === "string") {
+        this.events.onTurnStarted(turn.id);
+      }
+      return;
+    }
     if (message.method === "turn/completed") {
-      this.events.onTurnComplete();
+      const turn = params.turn;
+      this.events.onTurnComplete(
+        isJsonObject(turn) && typeof turn.id === "string" ? turn.id : "",
+        isJsonObject(turn) && typeof turn.status === "string" ? turn.status : "completed"
+      );
       return;
     }
     if (message.method === "error") {
@@ -263,6 +341,17 @@ export class CodexConnection {
       error: { code: -32601, message: `Unsupported Codex request: ${message.method}` },
     });
   }
+}
+
+function turnInput(text: string, skills: SkillOption[]): JsonObject[] {
+  return [
+    ...skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path })),
+    { type: "text", text, text_elements: [] },
+  ];
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function activityFromItem(item: CodexItem, complete: boolean): Activity | null {

@@ -6,15 +6,30 @@ import {
   ActivityIcon,
   ChevronIcon,
   ComposeIcon,
+  FileIcon,
   FolderIcon,
   PanelIcon,
   PlusIcon,
   SendIcon,
   SettingsIcon,
+  StopIcon,
+  TerminalIcon,
 } from "./components/Icons";
+import { MarkdownMessage } from "./components/MarkdownMessage";
 import { SettingsView } from "./components/SettingsView";
 import { CodexConnection } from "./lib/codex";
-import type { Activity, Bootstrap, ChatMessage, CodexItem, CodexThread, Task } from "./types";
+import type {
+  Activity,
+  Bootstrap,
+  ChatMessage,
+  CodexItem,
+  CodexThread,
+  FilePreview,
+  PluginOption,
+  SkillOption,
+  Task,
+  TaskFile,
+} from "./types";
 
 interface Project {
   path: string;
@@ -71,6 +86,12 @@ export function App() {
   const [codexCommand, setCodexCommand] = useState("codex");
   const [claudeCommand, setClaudeCommand] = useState("claude");
   const [generating, setGenerating] = useState(false);
+  const [activeTurnId, setActiveTurnId] = useState("");
+  const [filePreview, setFilePreview] = useState<FilePreview | null>(null);
+  const [skills, setSkills] = useState<SkillOption[]>([]);
+  const [plugins, setPlugins] = useState<PluginOption[]>([]);
+  const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const connectionRef = useRef<CodexConnection | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -113,7 +134,12 @@ export function App() {
             }
           }
         },
+        onTurnStarted: (turnId) => {
+          setActiveTurnId(turnId);
+          setGenerating(true);
+        },
         onTurnComplete: () => {
+          setActiveTurnId("");
           setGenerating(false);
           void connection.listThreads().then((recent) => {
             setThreads(recent);
@@ -132,6 +158,14 @@ export function App() {
       connectionRef.current = connection;
       const recent = await connection.listThreads();
       setThreads(recent);
+      void connection
+        .listSkills(projectRoot)
+        .then(setSkills)
+        .catch(() => setSkills([]));
+      void connection
+        .listPlugins(projectRoot)
+        .then(setPlugins)
+        .catch(() => setPlugins([]));
       setConnectionState("ready");
       setConnectionError("");
     },
@@ -231,6 +265,10 @@ export function App() {
       ),
     [bootstrap.tasks]
   );
+  const projectActiveTasks = useMemo(
+    () => activeTasks.filter((task) => task.repoRoot === activeProject),
+    [activeProject, activeTasks]
+  );
   const visibleActivities = useMemo(
     () => mergeTaskActivities(activities, bootstrap.tasks),
     [activities, bootstrap.tasks]
@@ -255,6 +293,8 @@ export function App() {
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
+    setSelectedSkillPaths([]);
+    setSkillsOpen(false);
     try {
       await connect(selection);
     } catch (error) {
@@ -269,6 +309,8 @@ export function App() {
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
+    setSelectedSkillPaths([]);
+    setSkillsOpen(false);
     try {
       await connect(path);
     } catch (error) {
@@ -355,18 +397,28 @@ export function App() {
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
+    setSelectedSkillPaths([]);
+    setSkillsOpen(false);
     setNotice("");
   };
 
   const submit = async () => {
     const text = composer.trim();
     const connection = connectionRef.current;
-    if (!text || !connection || generating || connectionState !== "ready") return;
+    if (!text || !connection || connectionState !== "ready") return;
     setComposer("");
     setNotice("");
-    setGenerating(true);
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text }]);
+    const selectedSkills = skills.filter((skill) => selectedSkillPaths.includes(skill.path));
     try {
+      if (generating && activeThread && activeTurnId) {
+        await connection.steerTurn(activeThread.id, activeTurnId, text, selectedSkills);
+        setSelectedSkillPaths([]);
+        setSkillsOpen(false);
+        setNotice("Guidance added to the active Codex turn.");
+        return;
+      }
+      setGenerating(true);
       let thread = activeThread;
       if (!thread) {
         thread = await connection.startThread(activeProject);
@@ -374,9 +426,60 @@ export function App() {
         setActiveThread(thread);
         setThreads((current) => [thread!, ...current]);
       }
-      await connection.sendTurn(thread.id, text);
+      const turnId = await connection.sendTurn(thread.id, text, selectedSkills);
+      setSelectedSkillPaths([]);
+      setSkillsOpen(false);
+      setActiveTurnId(turnId);
     } catch (error) {
       setGenerating(false);
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const stopCurrentWork = async () => {
+    const connection = connectionRef.current;
+    setNotice("");
+    try {
+      const actions: Promise<unknown>[] = projectActiveTasks.map((task) =>
+        invoke("desktop_task_cancel", { taskId: task.id })
+      );
+      if (connection && activeThread && activeTurnId) {
+        actions.push(connection.interruptTurn(activeThread.id, activeTurnId));
+      }
+      await Promise.allSettled(actions);
+      setActiveTurnId("");
+      setGenerating(false);
+      await refreshTasks();
+      setNotice("Stopped active work in this project.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const inspectFile = async (path: string, line?: number) => {
+    try {
+      const preview = await invoke<FilePreview>("preview_local_file", {
+        path,
+        projectRoot: activeProject,
+      });
+      setFilePreview({ ...preview, line });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openTerminal = async (path = activeProject) => {
+    try {
+      await invoke("open_project_terminal", { path, projectRoot: activeProject });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openExternalFile = async (path: string) => {
+    try {
+      await invoke("open_local_file", { path, projectRoot: activeProject });
+    } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     }
   };
@@ -511,16 +614,27 @@ export function App() {
                 Done
               </button>
             ) : (
-              <button
-                className={activityOpen ? "activity-button active" : "activity-button"}
-                type="button"
-                onClick={() => setActivityOpen((open) => !open)}
-                aria-expanded={activityOpen}
-              >
-                <ActivityIcon />
-                <span>Workers</span>
-                {activeTasks.length > 0 && <b>{activeTasks.length}</b>}
-              </button>
+              <>
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => void openTerminal()}
+                  aria-label="Open project in Terminal"
+                  title="Open project in Terminal"
+                >
+                  <TerminalIcon />
+                </button>
+                <button
+                  className={activityOpen ? "activity-button active" : "activity-button"}
+                  type="button"
+                  onClick={() => setActivityOpen((open) => !open)}
+                  aria-expanded={activityOpen}
+                >
+                  <ActivityIcon />
+                  <span>Workers</span>
+                  {activeTasks.length > 0 && <b>{activeTasks.length}</b>}
+                </button>
+              </>
             )}
           </div>
         </header>
@@ -554,6 +668,10 @@ export function App() {
                         key={message.id}
                         task={taskById.get(message.taskId)}
                         fallbackObjective={message.text}
+                        onOpenFile={(path) => void inspectFile(path)}
+                        onOpenTerminal={(path) => void openTerminal(path)}
+                        onRefresh={() => void refreshTasks()}
+                        onNotice={setNotice}
                       />
                     ) : (
                       <article className={`message ${message.role}`} key={message.id}>
@@ -564,7 +682,14 @@ export function App() {
                           </div>
                         )}
                         <div className="message-text">
-                          {message.text || (message.streaming ? "Thinking…" : "")}
+                          {message.role === "assistant" ? (
+                            <MarkdownMessage
+                              text={message.text || (message.streaming ? "Thinking…" : "")}
+                              onOpenFile={(path, line) => void inspectFile(path, line)}
+                            />
+                          ) : (
+                            message.text
+                          )}
                         </div>
                       </article>
                     )
@@ -589,6 +714,55 @@ export function App() {
                   </button>
                 </div>
               )}
+              {skillsOpen && (
+                <div className="capability-popover">
+                  <div className="capability-heading">
+                    <div>
+                      <strong>Skills</strong>
+                      <span>Attach to your next Codex message</span>
+                    </div>
+                    <button type="button" onClick={() => setSkillsOpen(false)} aria-label="Close">
+                      ×
+                    </button>
+                  </div>
+                  <div className="capability-list">
+                    {skills.length === 0 ? (
+                      <p>No enabled Codex skills were discovered for this project.</p>
+                    ) : (
+                      skills.map((skill) => {
+                        const selected = selectedSkillPaths.includes(skill.path);
+                        return (
+                          <button
+                            className={selected ? "selected" : ""}
+                            type="button"
+                            key={skill.path}
+                            onClick={() =>
+                              setSelectedSkillPaths((current) =>
+                                selected
+                                  ? current.filter((path) => path !== skill.path)
+                                  : [...current, skill.path]
+                              )
+                            }
+                          >
+                            <span>
+                              <strong>{skill.name}</strong>
+                              <small>{skill.description}</small>
+                            </span>
+                            <i>{selected ? "✓" : skill.scope}</i>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  {plugins.length > 0 && (
+                    <div className="connected-plugins">
+                      <span>Connected plugins</span>
+                      <p>{plugins.map((plugin) => plugin.displayName).join(" · ")}</p>
+                      <small>Plugin tools remain available automatically through Codex.</small>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="composer">
                 <textarea
                   value={composer}
@@ -602,28 +776,50 @@ export function App() {
                   rows={1}
                   placeholder={
                     connectionState === "ready"
-                      ? "Ask Tandem anything"
+                      ? generating
+                        ? "Steer Codex while it works"
+                        : "Ask Tandem anything"
                       : "Connecting to your Codex subscription…"
                   }
                   aria-label="Message Tandem"
                   disabled={connectionState !== "ready"}
                 />
                 <div className="composer-meta">
+                  <button
+                    className={skillsOpen ? "skill-picker active" : "skill-picker"}
+                    type="button"
+                    onClick={() => setSkillsOpen((open) => !open)}
+                  >
+                    <PlusIcon />
+                    Skills
+                    {selectedSkillPaths.length > 0 && <b>{selectedSkillPaths.length}</b>}
+                  </button>
                   <span>
                     <i className="provider-dot codex" />
-                    Codex plans
+                    {generating ? "Steering Codex" : "Codex plans"}
                   </span>
                   <span>
                     <i className="provider-dot claude" />
                     Claude executes
                   </span>
                 </div>
+                {(generating || projectActiveTasks.length > 0) && (
+                  <button
+                    className="stop-button"
+                    type="button"
+                    onClick={() => void stopCurrentWork()}
+                    aria-label="Stop active work"
+                    title="Stop Codex and active Claude workers"
+                  >
+                    <StopIcon />
+                  </button>
+                )}
                 <button
                   className="send-button"
                   type="button"
                   onClick={() => void submit()}
-                  disabled={!composer.trim() || generating || connectionState !== "ready"}
-                  aria-label="Send message"
+                  disabled={!composer.trim() || connectionState !== "ready"}
+                  aria-label={generating ? "Steer active Codex turn" : "Send message"}
                 >
                   <SendIcon />
                 </button>
@@ -695,6 +891,47 @@ export function App() {
           </aside>
         </>
       )}
+
+      {filePreview && (
+        <>
+          <button
+            className="panel-scrim"
+            type="button"
+            onClick={() => setFilePreview(null)}
+            aria-label="Close file preview"
+          />
+          <aside className="file-panel" aria-label="File preview">
+            <div className="file-panel-header">
+              <div>
+                <FileIcon />
+                <span>{filePreview.path}</span>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setFilePreview(null)}
+                aria-label="Close file preview"
+              >
+                ×
+              </button>
+            </div>
+            <div className="file-panel-actions">
+              <button type="button" onClick={() => void openExternalFile(filePreview.path)}>
+                Open in editor
+              </button>
+              <button type="button" onClick={() => void openTerminal(filePreview.path)}>
+                <TerminalIcon /> Terminal
+              </button>
+            </div>
+            <pre data-line={filePreview.line ?? undefined}>
+              <code>{filePreview.content}</code>
+            </pre>
+            {filePreview.truncated && (
+              <p className="file-truncated">Preview limited to the first 1 MB.</p>
+            )}
+          </aside>
+        </>
+      )}
     </div>
   );
 }
@@ -718,15 +955,30 @@ function EmptyConversation({ project }: { project: string }) {
 function WorkerCard({
   task,
   fallbackObjective,
+  onOpenFile,
+  onOpenTerminal,
+  onRefresh,
+  onNotice,
 }: {
   task: Task | undefined;
   fallbackObjective: string;
+  onOpenFile: (path: string) => void;
+  onOpenTerminal: (path: string) => void;
+  onRefresh: () => void;
+  onNotice: (message: string) => void;
 }) {
+  const [expandedEvent, setExpandedEvent] = useState<number | null>(null);
+  const [files, setFiles] = useState<TaskFile[] | null>(null);
+  const [steering, setSteering] = useState(false);
+  const [guidance, setGuidance] = useState("");
   const status = task?.status ?? "preparing";
   const report = task?.report;
   const progress = (task?.events ?? [])
-    .filter((event) => event.eventType === "worker.activity")
-    .slice(-3);
+    .filter((event) =>
+      ["worker.activity", "worker.steered", "worker.steer_failed"].includes(event.eventType)
+    )
+    .slice(-5);
+  const active = ["queued", "preparing", "running"].includes(status);
   const statusLabel =
     status === "completed"
       ? "Completed"
@@ -756,6 +1008,24 @@ function WorkerCard({
           <strong>Claude worker</strong>
           <span>{statusLabel}</span>
         </div>
+        {active && task && (
+          <button
+            className="worker-stop"
+            type="button"
+            onClick={async () => {
+              try {
+                await invoke("desktop_task_cancel", { taskId: task.id });
+                onRefresh();
+              } catch (error) {
+                onNotice(error instanceof Error ? error.message : String(error));
+              }
+            }}
+            aria-label="Stop Claude worker"
+            title="Stop Claude worker"
+          >
+            <StopIcon />
+          </button>
+        )}
         <i className={`activity-status ${statusClass}`} aria-hidden="true" />
       </div>
       <p className="worker-objective">{task?.objective ?? fallbackObjective}</p>
@@ -763,8 +1033,62 @@ function WorkerCard({
       {progress.length > 0 && !report && (
         <div className="worker-progress">
           {progress.map((event) => (
-            <span key={event.id}>{workerEventLabel(event.payload)}</span>
+            <div key={event.id}>
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedEvent((current) => (current === event.id ? null : event.id))
+                }
+              >
+                {workerEventLabel(event.payload)}
+                <ChevronIcon className={expandedEvent === event.id ? "chevron open" : "chevron"} />
+              </button>
+              {expandedEvent === event.id && <pre>{JSON.stringify(event.payload, null, 2)}</pre>}
+            </div>
           ))}
+        </div>
+      )}
+
+      {active && task && (
+        <div className="worker-steer">
+          {steering ? (
+            <>
+              <input
+                value={guidance}
+                onChange={(event) => setGuidance(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setSteering(false);
+                }}
+                placeholder="Guide Claude while it works"
+                aria-label="Steer Claude worker"
+                autoFocus
+              />
+              <button
+                type="button"
+                disabled={!guidance.trim()}
+                onClick={async () => {
+                  try {
+                    await invoke("desktop_task_steer", {
+                      taskId: task.id,
+                      message: guidance.trim(),
+                    });
+                    setGuidance("");
+                    setSteering(false);
+                    onNotice("Guidance sent to the Claude worker.");
+                    onRefresh();
+                  } catch (error) {
+                    onNotice(error instanceof Error ? error.message : String(error));
+                  }
+                }}
+              >
+                Send
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => setSteering(true)}>
+              Steer Claude
+            </button>
+          )}
         </div>
       )}
 
@@ -789,6 +1113,58 @@ function WorkerCard({
       )}
 
       {!report && task?.error && <p className="worker-error">{task.error}</p>}
+
+      {task && (
+        <div className="worker-files">
+          <button
+            type="button"
+            onClick={async () => {
+              if (files) {
+                setFiles(null);
+                return;
+              }
+              try {
+                setFiles(await invoke<TaskFile[]>("desktop_task_files", { taskId: task.id }));
+              } catch (error) {
+                onNotice(error instanceof Error ? error.message : String(error));
+              }
+            }}
+          >
+            <FileIcon />
+            {files ? "Hide files" : "Files changed"}
+            <ChevronIcon className={files ? "chevron open" : "chevron"} />
+          </button>
+          {files && (
+            <div className="worker-file-list">
+              {files.length === 0 ? (
+                <span>No file changes yet.</span>
+              ) : (
+                files.map((file) => (
+                  <div key={file.absolutePath}>
+                    <button type="button" onClick={() => onOpenFile(file.absolutePath)}>
+                      <span>{file.path}</span>
+                      {(file.additions !== null || file.deletions !== null) && (
+                        <small>
+                          <b>+{file.additions ?? 0}</b> <i>-{file.deletions ?? 0}</i>
+                        </small>
+                      )}
+                    </button>
+                    <button
+                      className="file-terminal"
+                      type="button"
+                      onClick={() => onOpenTerminal(file.absolutePath)}
+                      aria-label={`Open ${file.path} in Terminal`}
+                      title="Open folder in Terminal"
+                    >
+                      <TerminalIcon />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </article>
   );
 }

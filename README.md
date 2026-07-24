@@ -38,6 +38,15 @@ orchestration core:
 - Codex delegation calls bind the resulting Claude task to the active chat.
 - Claude progress, blocked questions, final reports, verification, and isolated
   commit metadata appear inline while the outer turn continues.
+- Assistant responses render Markdown, and local file links open a lightweight
+  in-app preview with external-editor and Terminal shortcuts.
+- The active Codex turn and Claude workers can be stopped independently or
+  together. New composer messages steer the active Codex turn, while each
+  worker card can send guidance to Claude's live streaming session.
+- Changed files and worker steps are expandable and clickable.
+- The composer discovers enabled Codex skills and attaches selected skills as
+  native turn input. Installed plugins remain available through their owning
+  CLI session.
 - Worker activity stays behind an on-demand panel rather than turning the app
   into an IDE or monitoring dashboard.
 - Connections settings show each CLI's resolved path, version, and subscription
@@ -159,6 +168,7 @@ tandem goal create <objective>
 tandem task list [--status <status>]
 tandem task show <task-id>
 tandem task watch <task-id> [--once]
+tandem task steer <task-id> <guidance>
 tandem task cancel <task-id>
 tandem apply <completed-task-id>
 ```

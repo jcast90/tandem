@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TandemStore } from "../src/store.js";
+import { TandemService } from "../src/service.js";
 
 const cleanup: string[] = [];
 
@@ -83,5 +84,37 @@ describe("TandemStore", () => {
     });
     expect(store.getTask(task.id.slice(0, 8))?.id).toBe(task.id);
     store.close();
+  });
+
+  it("queues steering guidance only for active tasks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-steer-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const task = store.createTask({
+      workOrder: {
+        objective: "Test steering",
+        acceptanceCriteria: [],
+        context: [],
+        goalId: null,
+        parentTaskId: null,
+        profileId: null,
+      },
+      profileId: "worker-primary",
+      repoRoot: "/tmp/repo",
+      worktreePath: "/tmp/worktree",
+      branch: "tandem/test-steer",
+      runtime: "process",
+    });
+    const service = new TandemService(store);
+
+    service.steerTask(task.id, "Focus on the parser.");
+    expect(store.listEvents(task.id).at(-1)).toMatchObject({
+      type: "task.steer.requested",
+      payload: { message: "Focus on the parser." },
+    });
+
+    store.updateTask(task.id, { status: "completed" });
+    expect(() => service.steerTask(task.id, "Too late")).toThrow("not accepting guidance");
+    service.close();
   });
 });

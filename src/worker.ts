@@ -23,6 +23,34 @@ export async function runWorker(taskId: string): Promise<number> {
   const profile = resolveProfile(config, task.profileId);
   const adapter = createWorkerAdapter(profile);
   let interrupted = false;
+  // Start at the beginning so guidance queued while the runtime was launching
+  // reaches the adapter once its streaming stdin is ready.
+  let steerCursor = 0;
+  let steeringBusy = false;
+  const steeringInterval = setInterval(() => {
+    if (steeringBusy || interrupted) return;
+    steeringBusy = true;
+    try {
+      const events = store.listEvents(task.id, steerCursor);
+      for (const event of events) {
+        steerCursor = Math.max(steerCursor, event.id);
+        if (event.type !== "task.steer.requested") continue;
+        const message = event.payload.message;
+        if (typeof message !== "string" || !message.trim()) continue;
+        try {
+          adapter.steer(message);
+          store.appendEvent(task.id, "worker.steered", { message });
+        } catch (error) {
+          store.appendEvent(task.id, "worker.steer_failed", {
+            message,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } finally {
+      steeringBusy = false;
+    }
+  }, 250);
 
   const cancel = (): void => {
     if (interrupted) return;
@@ -110,6 +138,7 @@ export async function runWorker(taskId: string): Promise<number> {
     console.error(message);
     return 1;
   } finally {
+    clearInterval(steeringInterval);
     process.removeListener("SIGTERM", cancel);
     process.removeListener("SIGINT", cancel);
     store.close();

@@ -294,6 +294,13 @@ async function taskCommand(rawArgs: string[]): Promise<void> {
       console.log(JSON.stringify(service.cancelTask(requireArg(rawArgs, 0, "task id")), null, 2));
       return;
     }
+    if (subcommand === "steer") {
+      const id = requireArg(rawArgs, 0, "task id");
+      const message = rawArgs.slice(1).join(" ").trim();
+      if (!message) throw new Error("Usage: tandem task steer <task-id> <guidance>");
+      console.log(JSON.stringify(service.steerTask(id, message), null, 2));
+      return;
+    }
     throw new Error(`Unknown task command: ${subcommand}`);
   } finally {
     service.close();
@@ -394,6 +401,7 @@ Usage:
   tandem task list [--status <status>]
   tandem task show <task-id>
   tandem task watch <task-id> [--once]
+  tandem task steer <task-id> <guidance>
   tandem task cancel <task-id>
   tandem apply <completed-task-id>
 

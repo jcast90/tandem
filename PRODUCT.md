@@ -6,7 +6,7 @@ product
 
 ## Platform
 
-web
+macOS desktop
 
 ## Users
 
@@ -46,6 +46,10 @@ are supporting information revealed only when useful.
 - Progressive disclosure: orchestration details appear in context or on demand.
 - Quiet status: communicate active work without turning the interface into a
   monitoring console.
+- Direct control: active outer turns and workers can be steered or stopped
+  without leaving the conversation.
+- Inspect, then branch out: files open in a lightweight read-only preview, with
+  explicit actions for an external editor or Terminal.
 - Subscription native: Codex and Claude authentication remain owned by their
   installed CLIs.
 

@@ -62,6 +62,8 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
     const effort = stringSetting(profile, "effort");
     const args = [
       "-p",
+      "--input-format",
+      "stream-json",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -74,7 +76,6 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
     ];
     if (profile.model) args.push("--model", profile.model);
     if (effort) args.push("--effort", effort);
-    args.push(buildWorkerPrompt(task));
 
     const child = spawn(executable, args, {
       cwd: task.worktreePath,
@@ -82,6 +83,7 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
       stdio: "pipe",
     });
     this.child = child;
+    child.stdin.write(streamingUserMessage(buildWorkerPrompt(task)));
 
     let resultEvent: unknown = null;
     let stderr = "";
@@ -93,7 +95,10 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
       writeTail = writeTail.then(() => appendFile(streamLog, `${line}\n`));
       const event = safeJsonObject(line);
       if (!event) return;
-      if (event.type === "result") resultEvent = event;
+      if (event.type === "result") {
+        resultEvent = event;
+        child.stdin.end();
+      }
       const activity = extractActivity(event);
       if (activity) hooks.onActivity("worker.activity", activity);
     });
@@ -126,9 +131,28 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
     };
   }
 
+  steer(message: string): void {
+    const text = message.trim();
+    if (!text) throw new Error("Steering guidance cannot be empty.");
+    if (!this.child || !this.child.stdin.writable) {
+      throw new Error("The Claude worker is no longer accepting guidance.");
+    }
+    this.child.stdin.write(streamingUserMessage(text));
+  }
+
   cancel(): void {
     this.child?.kill("SIGTERM");
   }
+}
+
+function streamingUserMessage(text: string): string {
+  return `${JSON.stringify({
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "text", text }],
+    },
+  })}\n`;
 }
 
 function buildWorkerPrompt(task: TaskRecord): string {

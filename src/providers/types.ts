@@ -16,6 +16,7 @@ export interface WorkerAdapter {
       onActivity: (type: string, payload?: Record<string, unknown>) => void;
     }
   ): Promise<WorkerRunResult>;
+  steer(message: string): void;
   cancel(): void;
 }
 

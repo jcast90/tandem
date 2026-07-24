@@ -21796,6 +21796,17 @@ var TandemService = class {
     this.store.appendEvent(task.id, "task.canceled", { pid: task.pid });
     return canceled;
   }
+  steerTask(taskId, message) {
+    const task = this.store.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (!["queued", "preparing", "running"].includes(task.status)) {
+      throw new Error(`Task ${task.id.slice(0, 8)} is not accepting guidance.`);
+    }
+    const guidance = message.trim();
+    if (!guidance) throw new Error("Steering guidance cannot be empty.");
+    this.store.appendEvent(task.id, "task.steer.requested", { message: guidance });
+    return task;
+  }
   async applyTask(taskId) {
     const task = this.store.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
