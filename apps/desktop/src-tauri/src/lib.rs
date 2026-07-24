@@ -25,8 +25,7 @@ struct CodexProcess {
 
 impl Drop for CodexProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        terminate_child(&mut self.child);
     }
 }
 
@@ -182,8 +181,6 @@ fn start_codex(
                 endpoint: existing.endpoint.clone(),
             });
         }
-        let _ = existing.child.kill();
-        let _ = existing.child.wait();
         *process = None;
     }
 
@@ -529,6 +526,24 @@ fn stop_codex(app: &tauri::AppHandle) {
     if let Ok(mut process) = state.codex.lock() {
         *process = None;
     };
+}
+
+fn terminate_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    let _ = Command::new("/bin/kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+    for _ in 0..20 {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

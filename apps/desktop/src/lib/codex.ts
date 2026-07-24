@@ -51,6 +51,7 @@ export class CodexConnection {
           capabilities: {
             experimentalApi: true,
             requestAttestation: false,
+            mcpServerOpenaiFormElicitation: true,
           },
         });
         this.notify("initialized");
@@ -202,6 +203,21 @@ export class CodexConnection {
   }
 
   private handleServerRequest(message: RpcNotification): void {
+    if (message.method === "mcpServer/elicitation/request") {
+      const serverName = String(message.params?.serverName ?? "");
+      void this.send({
+        id: message.id!,
+        result: {
+          action: serverName === "tandem" ? "accept" : "decline",
+          content: serverName === "tandem" ? {} : null,
+          _meta: null,
+        },
+      });
+      if (serverName !== "tandem") {
+        this.events.onError(`Tandem declined an unexpected request from ${serverName || "MCP"}.`);
+      }
+      return;
+    }
     if (message.method === "item/tool/requestUserInput") {
       void this.send({
         id: message.id!,
