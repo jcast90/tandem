@@ -226,7 +226,9 @@ fn start_codex(
         .env("TANDEM_HOME", &home)
         .env("TANDEM_PROJECT_ROOT", &project_root)
         .env("TANDEM_WORKER_ENTRY", &worker_entry)
-        .stdin(Stdio::null())
+        // Codex app-server exits when stdin reaches EOF, even while its WebSocket
+        // listener is active. Keep the pipe owned by Child open for its lifetime.
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
@@ -508,9 +510,16 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(&Value::String(value.to_string())).unwrap_or_else(|_| "\"\"".into())
 }
 
+fn stop_codex(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    if let Ok(mut process) = state.codex.lock() {
+        *process = None;
+    };
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_websocket::init())
         .manage(AppState::default())
@@ -519,6 +528,14 @@ pub fn run() {
             desktop_tasks,
             start_codex
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Tandem desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Tandem desktop");
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            stop_codex(app_handle);
+        }
+    });
 }

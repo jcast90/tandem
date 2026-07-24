@@ -21940,11 +21940,7 @@ server.registerTool(
     annotations: { readOnlyHint: true }
   },
   async ({ task_id, after_event_id, timeout_seconds }, extra) => {
-    const snapshot = await service.waitForTask(
-      task_id,
-      after_event_id ?? 0,
-      timeout_seconds ?? 25
-    );
+    const snapshot = await service.waitForTask(task_id, after_event_id ?? 0, timeout_seconds ?? 25);
     const progressToken = extra._meta?.progressToken;
     if (progressToken !== void 0) {
       for (const event of snapshot.events) {
