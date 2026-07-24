@@ -111,9 +111,8 @@ textarea:focus-visible {
 .brand-mark,
 .assistant-mark,
 .empty-mark {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
+  display: inline-block;
+  background: url("./assets/tandem-app-icon.png") center / contain no-repeat;
 }
 
 .brand-mark {
@@ -124,27 +123,7 @@ textarea:focus-visible {
 .brand-mark span,
 .assistant-mark span,
 .empty-mark span {
-  position: absolute;
-  border-radius: 50%;
-}
-
-.brand-mark span:first-child,
-.assistant-mark span:first-child,
-.empty-mark span:first-child {
-  width: 70%;
-  height: 70%;
-  background: var(--primary);
-  transform: translate(-18%, -10%);
-}
-
-.brand-mark span:last-child,
-.assistant-mark span:last-child,
-.empty-mark span:last-child {
-  width: 70%;
-  height: 70%;
-  background: var(--accent);
-  transform: translate(18%, 10%);
-  mix-blend-mode: screen;
+  display: none;
 }
 
 .sidebar-toggle {
