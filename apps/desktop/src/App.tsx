@@ -10,7 +10,9 @@ import {
   PanelIcon,
   PlusIcon,
   SendIcon,
+  SettingsIcon,
 } from "./components/Icons";
+import { SettingsView } from "./components/SettingsView";
 import { CodexConnection } from "./lib/codex";
 import type { Activity, Bootstrap, ChatMessage, CodexItem, CodexThread, Task } from "./types";
 
@@ -22,11 +24,28 @@ interface Project {
 const EMPTY_BOOTSTRAP: Bootstrap = {
   tandemHome: "",
   projectRoot: "",
+  logPath: "",
   runtime: "auto",
   outerLabel: "Codex CLI",
   workerLabel: "Claude CLI",
-  codex: { command: "codex", installed: false, version: null },
-  claude: { command: "claude", installed: false, version: null },
+  codex: {
+    command: "codex",
+    resolvedPath: null,
+    installed: false,
+    version: null,
+    authenticated: null,
+    authLabel: null,
+    error: null,
+  },
+  claude: {
+    command: "claude",
+    resolvedPath: null,
+    installed: false,
+    version: null,
+    authenticated: null,
+    authLabel: null,
+    error: null,
+  },
   goals: [],
   tasks: [],
 };
@@ -43,9 +62,14 @@ export function App() {
   const [connectionState, setConnectionState] = useState<"starting" | "ready" | "error">(
     "starting"
   );
+  const [connectionError, setConnectionError] = useState("");
   const [notice, setNotice] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [codexCommand, setCodexCommand] = useState("codex");
+  const [claudeCommand, setClaudeCommand] = useState("claude");
   const [generating, setGenerating] = useState(false);
   const connectionRef = useRef<CodexConnection | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -53,6 +77,8 @@ export function App() {
   const refreshBootstrap = useCallback(async () => {
     const next = await invoke<Bootstrap>("desktop_bootstrap");
     setBootstrap(next);
+    setCodexCommand(next.codex.command);
+    setClaudeCommand(next.claude.command);
     return next;
   }, []);
 
@@ -63,11 +89,13 @@ export function App() {
   }, []);
 
   const connect = useCallback(
-    async (projectRoot: string) => {
+    async (projectRoot: string, forceRestart = false) => {
       connectionRef.current?.close();
       setConnectionState("starting");
+      setConnectionError("");
       const { endpoint } = await invoke<{ endpoint: string }>("start_codex", {
         projectRoot,
+        forceRestart,
       });
       const connection = new CodexConnection(endpoint, {
         onDelta: (itemId, delta) => {
@@ -105,9 +133,21 @@ export function App() {
       const recent = await connection.listThreads();
       setThreads(recent);
       setConnectionState("ready");
+      setConnectionError("");
     },
     [refreshBootstrap, refreshTasks]
   );
+
+  const recordConnectionError = useCallback((error: unknown) => {
+    const message =
+      error instanceof Error && error.message.trim()
+        ? error.message
+        : String(error).trim() || "Tandem could not reach the local Codex service.";
+    setConnectionState("error");
+    setConnectionError(message);
+    setNotice(message);
+    setSettingsOpen(true);
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -127,14 +167,13 @@ export function App() {
         await connect(data.projectRoot);
       })
       .catch((error) => {
-        setConnectionState("error");
-        setNotice(error instanceof Error ? error.message : String(error));
+        recordConnectionError(error);
       });
     return () => {
       canceled = true;
       connectionRef.current?.close();
     };
-  }, [connect, refreshBootstrap]);
+  }, [connect, recordConnectionError, refreshBootstrap]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -212,27 +251,86 @@ export function App() {
     setProjects(next);
     storeProjects(next);
     setActiveProject(selection);
+    setSettingsOpen(false);
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
     try {
       await connect(selection);
     } catch (error) {
-      setConnectionState("error");
-      setNotice(error instanceof Error ? error.message : String(error));
+      recordConnectionError(error);
     }
   };
 
   const selectProject = async (path: string) => {
     if (path === activeProject) return;
     setActiveProject(path);
+    setSettingsOpen(false);
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
     try {
       await connect(path);
     } catch (error) {
-      setConnectionState("error");
+      recordConnectionError(error);
+    }
+  };
+
+  const retryConnections = async () => {
+    setSettingsBusy(true);
+    setNotice("");
+    try {
+      const next = await refreshBootstrap();
+      if (!next.codex.installed) {
+        throw new Error(
+          "Codex CLI was not found. Confirm its command or full path in Connections."
+        );
+      }
+      await connect(activeProject, true);
+      setNotice("Codex and Claude connection checks completed.");
+    } catch (error) {
+      recordConnectionError(error);
+      setSettingsOpen(true);
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const saveSettings = async () => {
+    setSettingsBusy(true);
+    setNotice("");
+    try {
+      const next = await invoke<Bootstrap>("save_desktop_settings", {
+        settings: {
+          codexCommand: codexCommand.trim(),
+          claudeCommand: claudeCommand.trim(),
+        },
+      });
+      setBootstrap(next);
+      setCodexCommand(next.codex.command);
+      setClaudeCommand(next.claude.command);
+      await connect(activeProject, true);
+      setNotice("Connection settings saved.");
+    } catch (error) {
+      recordConnectionError(error);
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const openProviderLogin = async (provider: "codex" | "claude") => {
+    try {
+      const message = await invoke<string>("open_provider_login", { provider });
+      setNotice(message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const revealConnectionLog = async () => {
+    try {
+      await invoke("reveal_connection_log");
+    } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     }
   };
@@ -240,6 +338,7 @@ export function App() {
   const selectThread = async (thread: CodexThread) => {
     const connection = connectionRef.current;
     if (!connection) return;
+    setSettingsOpen(false);
     setNotice("");
     try {
       const resumed = await connection.resumeThread(thread.id);
@@ -252,6 +351,7 @@ export function App() {
   };
 
   const newChat = () => {
+    setSettingsOpen(false);
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
@@ -359,16 +459,21 @@ export function App() {
           </div>
         </div>
 
-        <div className="subscription-row">
-          <StatusDot ready={bootstrap.codex.installed} />
+        <button
+          className={settingsOpen ? "subscription-row active" : "subscription-row"}
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <StatusDot ready={providerReady(bootstrap.codex)} />
           <span>Codex</span>
           <span className="pairing-line" />
-          <StatusDot ready={bootstrap.claude.installed} />
+          <StatusDot ready={providerReady(bootstrap.claude)} />
           <span>Claude</span>
-        </div>
+          <SettingsIcon className="subscription-settings-icon" />
+        </button>
       </aside>
 
-      <main className="conversation">
+      <main className={settingsOpen ? "conversation settings-mode" : "conversation"}>
         <header className="conversation-header">
           {!sidebarOpen && (
             <button
@@ -381,119 +486,154 @@ export function App() {
             </button>
           )}
           <div className="conversation-title">
-            <strong>{activeThread?.name || activeThread?.preview || "New chat"}</strong>
-            <span>{projectName(activeProject)}</span>
+            <strong>
+              {settingsOpen
+                ? "Settings"
+                : activeThread?.name || activeThread?.preview || "New chat"}
+            </strong>
+            <span>{settingsOpen ? "Connections and setup" : projectName(activeProject)}</span>
           </div>
           <div className="header-actions">
-            <span className={`connection-state ${connectionState}`}>
+            <button
+              className={`connection-state ${connectionState}`}
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Open connection settings"
+            >
               {connectionState === "ready"
                 ? "Subscriptions ready"
                 : connectionState === "starting"
                   ? "Connecting"
                   : "Connection issue"}
-            </span>
-            <button
-              className={activityOpen ? "activity-button active" : "activity-button"}
-              type="button"
-              onClick={() => setActivityOpen((open) => !open)}
-              aria-expanded={activityOpen}
-            >
-              <ActivityIcon />
-              <span>Workers</span>
-              {activeTasks.length > 0 && <b>{activeTasks.length}</b>}
             </button>
+            {settingsOpen ? (
+              <button className="done-button" type="button" onClick={() => setSettingsOpen(false)}>
+                Done
+              </button>
+            ) : (
+              <button
+                className={activityOpen ? "activity-button active" : "activity-button"}
+                type="button"
+                onClick={() => setActivityOpen((open) => !open)}
+                aria-expanded={activityOpen}
+              >
+                <ActivityIcon />
+                <span>Workers</span>
+                {activeTasks.length > 0 && <b>{activeTasks.length}</b>}
+              </button>
+            )}
           </div>
         </header>
 
-        <div className="message-scroll" ref={scrollRef}>
-          {messages.length === 0 ? (
-            <EmptyConversation project={projectName(activeProject)} />
-          ) : (
-            <div className="message-column">
-              {messages.map((message) =>
-                message.role === "worker" && message.taskId ? (
-                  <WorkerCard
-                    key={message.id}
-                    task={taskById.get(message.taskId)}
-                    fallbackObjective={message.text}
-                  />
-                ) : (
-                  <article className={`message ${message.role}`} key={message.id}>
-                    {message.role === "assistant" && (
-                      <div className="assistant-mark" aria-label="Tandem">
-                        <span />
-                        <span />
-                      </div>
-                    )}
-                    <div className="message-text">
-                      {message.text || (message.streaming ? "Thinking…" : "")}
+        {settingsOpen ? (
+          <SettingsView
+            bootstrap={bootstrap}
+            codexCommand={codexCommand}
+            claudeCommand={claudeCommand}
+            connectionState={connectionState}
+            connectionError={connectionError}
+            notice={notice}
+            busy={settingsBusy}
+            onCodexCommandChange={setCodexCommand}
+            onClaudeCommandChange={setClaudeCommand}
+            onOpenLogin={(provider) => void openProviderLogin(provider)}
+            onRevealLog={() => void revealConnectionLog()}
+            onRetry={() => void retryConnections()}
+            onSave={() => void saveSettings()}
+          />
+        ) : (
+          <>
+            <div className="message-scroll" ref={scrollRef}>
+              {messages.length === 0 ? (
+                <EmptyConversation project={projectName(activeProject)} />
+              ) : (
+                <div className="message-column">
+                  {messages.map((message) =>
+                    message.role === "worker" && message.taskId ? (
+                      <WorkerCard
+                        key={message.id}
+                        task={taskById.get(message.taskId)}
+                        fallbackObjective={message.text}
+                      />
+                    ) : (
+                      <article className={`message ${message.role}`} key={message.id}>
+                        {message.role === "assistant" && (
+                          <div className="assistant-mark" aria-label="Tandem">
+                            <span />
+                            <span />
+                          </div>
+                        )}
+                        <div className="message-text">
+                          {message.text || (message.streaming ? "Thinking…" : "")}
+                        </div>
+                      </article>
+                    )
+                  )}
+                  {generating && !messages.some((message) => message.streaming) && (
+                    <div className="thinking-row">
+                      <span />
+                      <span />
+                      <span />
                     </div>
-                  </article>
-                )
-              )}
-              {generating && !messages.some((message) => message.streaming) && (
-                <div className="thinking-row">
-                  <span />
-                  <span />
-                  <span />
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
 
-        <div className="composer-region">
-          {notice && (
-            <div className="notice" role="status">
-              {notice}
-              <button type="button" onClick={() => setNotice("")} aria-label="Dismiss message">
-                ×
-              </button>
+            <div className="composer-region">
+              {notice && (
+                <div className="notice" role="status">
+                  {notice}
+                  <button type="button" onClick={() => setNotice("")} aria-label="Dismiss message">
+                    ×
+                  </button>
+                </div>
+              )}
+              <div className="composer">
+                <textarea
+                  value={composer}
+                  onChange={(event) => setComposer(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void submit();
+                    }
+                  }}
+                  rows={1}
+                  placeholder={
+                    connectionState === "ready"
+                      ? "Ask Tandem anything"
+                      : "Connecting to your Codex subscription…"
+                  }
+                  aria-label="Message Tandem"
+                  disabled={connectionState !== "ready"}
+                />
+                <div className="composer-meta">
+                  <span>
+                    <i className="provider-dot codex" />
+                    Codex plans
+                  </span>
+                  <span>
+                    <i className="provider-dot claude" />
+                    Claude executes
+                  </span>
+                </div>
+                <button
+                  className="send-button"
+                  type="button"
+                  onClick={() => void submit()}
+                  disabled={!composer.trim() || generating || connectionState !== "ready"}
+                  aria-label="Send message"
+                >
+                  <SendIcon />
+                </button>
+              </div>
+              <p className="composer-footnote">
+                Uses your authenticated Codex and Claude CLI subscriptions. No API keys.
+              </p>
             </div>
-          )}
-          <div className="composer">
-            <textarea
-              value={composer}
-              onChange={(event) => setComposer(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void submit();
-                }
-              }}
-              rows={1}
-              placeholder={
-                connectionState === "ready"
-                  ? "Ask Tandem anything"
-                  : "Connecting to your Codex subscription…"
-              }
-              aria-label="Message Tandem"
-              disabled={connectionState !== "ready"}
-            />
-            <div className="composer-meta">
-              <span>
-                <i className="provider-dot codex" />
-                Codex plans
-              </span>
-              <span>
-                <i className="provider-dot claude" />
-                Claude executes
-              </span>
-            </div>
-            <button
-              className="send-button"
-              type="button"
-              onClick={() => void submit()}
-              disabled={!composer.trim() || generating || connectionState !== "ready"}
-              aria-label="Send message"
-            >
-              <SendIcon />
-            </button>
-          </div>
-          <p className="composer-footnote">
-            Uses your authenticated Codex and Claude CLI subscriptions. No API keys.
-          </p>
-        </div>
+          </>
+        )}
       </main>
 
       {activityOpen && (
@@ -655,6 +795,10 @@ function WorkerCard({
 
 function StatusDot({ ready }: { ready: boolean }) {
   return <i className={ready ? "status-dot ready" : "status-dot"} aria-hidden="true" />;
+}
+
+function providerReady(status: Bootstrap["codex"]): boolean {
+  return status.installed && status.authenticated !== false;
 }
 
 function projectName(path: string): string {

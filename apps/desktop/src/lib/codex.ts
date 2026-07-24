@@ -29,7 +29,11 @@ export class CodexConnection {
   private nextId = 1;
   private readonly pending = new Map<
     number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timeout: number;
+    }
   >();
 
   constructor(
@@ -69,6 +73,7 @@ export class CodexConnection {
     void this.socket?.disconnect();
     this.socket = null;
     for (const pending of this.pending.values()) {
+      window.clearTimeout(pending.timeout);
       pending.reject(new Error("Codex connection closed."));
     }
     this.pending.clear();
@@ -113,7 +118,10 @@ export class CodexConnection {
     const socket = await TauriWebSocket.connect(this.endpoint);
     socket.addListener((message) => {
       if (message.type === "Text") this.handleMessage(message.data);
-      if (message.type === "Close") this.socket = null;
+      if (message.type === "Close") {
+        this.socket = null;
+        this.failPending("The local Codex service closed the connection.");
+      }
     });
     this.socket = socket;
   }
@@ -121,8 +129,14 @@ export class CodexConnection {
   private request(method: string, params: JsonObject): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timeout = window.setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method} timed out while waiting for the local Codex service.`));
+      }, 15_000);
+      this.pending.set(id, { resolve, reject, timeout });
       void this.send({ method, id, params }).catch((error) => {
+        const pending = this.pending.get(id);
+        if (pending) window.clearTimeout(pending.timeout);
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       });
@@ -150,6 +164,7 @@ export class CodexConnection {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
+      window.clearTimeout(pending.timeout);
       if (message.error) {
         pending.reject(new Error(message.error.message ?? "Codex request failed."));
       } else {
@@ -164,6 +179,14 @@ export class CodexConnection {
       return;
     }
     this.handleNotification(message);
+  }
+
+  private failPending(message: string): void {
+    for (const pending of this.pending.values()) {
+      window.clearTimeout(pending.timeout);
+      pending.reject(new Error(message));
+    }
+    this.pending.clear();
   }
 
   private handleNotification(message: RpcNotification): void {

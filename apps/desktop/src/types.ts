@@ -1,7 +1,11 @@
 export interface SubscriptionStatus {
   command: string;
+  resolvedPath: string | null;
   installed: boolean;
   version: string | null;
+  authenticated: boolean | null;
+  authLabel: string | null;
+  error: string | null;
 }
 
 export interface Goal {
@@ -48,6 +52,7 @@ export interface TaskEvent {
 export interface Bootstrap {
   tandemHome: string;
   projectRoot: string;
+  logPath: string;
   runtime: string;
   outerLabel: string;
   workerLabel: string;

@@ -40,6 +40,11 @@ orchestration core:
   commit metadata appear inline while the outer turn continues.
 - Worker activity stays behind an on-demand panel rather than turning the app
   into an IDE or monitoring dashboard.
+- Connections settings show each CLI's resolved path, version, and subscription
+  authentication state, with retry, login, and diagnostic-log actions.
+- Finder-launched builds discover CLIs installed by NVM, asdf, Homebrew, Bun,
+  pnpm, and common user-local paths without relying on an inherited terminal
+  `PATH`.
 - No OpenAI or Anthropic API key is requested, and the app does not use an API
   billing path.
 

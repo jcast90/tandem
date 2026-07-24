@@ -4,11 +4,11 @@ use serde_json::Value;
 use std::{
     env,
     fs::{self, OpenOptions},
-    net::TcpListener,
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::Manager;
 
@@ -33,8 +33,12 @@ impl Drop for CodexProcess {
 #[serde(rename_all = "camelCase")]
 struct SubscriptionStatus {
     command: String,
+    resolved_path: Option<String>,
     installed: bool,
     version: Option<String>,
+    authenticated: Option<bool>,
+    auth_label: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +84,7 @@ struct TaskEventView {
 struct Bootstrap {
     tandem_home: String,
     project_root: String,
+    log_path: String,
     runtime: String,
     outer_label: String,
     worker_label: String,
@@ -118,36 +123,143 @@ struct Routing {
     worker: String,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSettings {
+    codex_command: Option<String>,
+    claude_command: Option<String>,
+}
+
 #[tauri::command]
 fn desktop_bootstrap() -> Result<Bootstrap, String> {
     let home = tandem_home();
     let config = read_config(&home);
+    let settings = read_desktop_settings(&home);
     let project_root = tandem_repo_root();
     let (goals, tasks) = read_ledger(&home);
 
     let outer = routed_profile(&config, true);
     let worker = routed_profile(&config, false);
     let runtime = config.runtime.clone();
+    let codex_command = settings
+        .codex_command
+        .as_deref()
+        .or_else(|| outer.map(|profile| profile.command.as_str()))
+        .unwrap_or("codex");
+    let claude_command = settings
+        .claude_command
+        .as_deref()
+        .or_else(|| worker.map(|profile| profile.command.as_str()))
+        .unwrap_or("claude");
 
     Ok(Bootstrap {
         tandem_home: home.to_string_lossy().into_owned(),
         project_root: project_root.to_string_lossy().into_owned(),
+        log_path: home
+            .join("logs")
+            .join("codex-app-server.log")
+            .to_string_lossy()
+            .into_owned(),
         runtime,
         outer_label: profile_label(outer, "Codex CLI"),
         worker_label: profile_label(worker, "Claude CLI"),
-        codex: probe_command(
-            outer
-                .map(|profile| profile.command.as_str())
-                .unwrap_or("codex"),
-        ),
-        claude: probe_command(
-            worker
-                .map(|profile| profile.command.as_str())
-                .unwrap_or("claude"),
-        ),
+        codex: probe_command(codex_command, "codex"),
+        claude: probe_command(claude_command, "claude"),
         goals,
         tasks,
     })
+}
+
+#[tauri::command]
+fn save_desktop_settings(
+    settings: DesktopSettings,
+    state: tauri::State<'_, AppState>,
+) -> Result<Bootstrap, String> {
+    let settings = DesktopSettings {
+        codex_command: clean_command(settings.codex_command),
+        claude_command: clean_command(settings.claude_command),
+    };
+    let home = tandem_home();
+    fs::create_dir_all(&home)
+        .map_err(|error| format!("Could not create Tandem settings folder: {error}"))?;
+    let contents = serde_json::to_string_pretty(&settings)
+        .map_err(|error| format!("Could not prepare Tandem settings: {error}"))?;
+    let temporary = home.join("desktop-settings.json.tmp");
+    fs::write(&temporary, format!("{contents}\n"))
+        .map_err(|error| format!("Could not save Tandem settings: {error}"))?;
+    fs::rename(&temporary, home.join("desktop-settings.json"))
+        .map_err(|error| format!("Could not finish saving Tandem settings: {error}"))?;
+    if let Ok(mut process) = state.codex.lock() {
+        *process = None;
+    }
+    desktop_bootstrap()
+}
+
+#[tauri::command]
+fn open_provider_login(provider: String) -> Result<String, String> {
+    if provider != "codex" && provider != "claude" {
+        return Err("Unknown provider.".into());
+    }
+    let home = tandem_home();
+    let config = read_config(&home);
+    let settings = read_desktop_settings(&home);
+    let configured = if provider == "codex" {
+        settings
+            .codex_command
+            .or_else(|| routed_profile(&config, true).map(|profile| profile.command.clone()))
+            .unwrap_or_else(|| "codex".into())
+    } else {
+        settings
+            .claude_command
+            .or_else(|| routed_profile(&config, false).map(|profile| profile.command.clone()))
+            .unwrap_or_else(|| "claude".into())
+    };
+    let executable = resolve_command(&configured)
+        .ok_or_else(|| format!("{} CLI was not found.", capitalize(&provider)))?;
+    let actions = home.join("actions");
+    fs::create_dir_all(&actions)
+        .map_err(|error| format!("Could not create Tandem actions folder: {error}"))?;
+    let script = actions.join(format!("{provider}-login.command"));
+    let arguments = if provider == "codex" {
+        "login"
+    } else {
+        "auth login"
+    };
+    let title = capitalize(&provider);
+    let contents = format!(
+        "#!/bin/zsh\nclear\nprintf '\\nTandem — Connect {title}\\n\\n'\nexport PATH={}\n{} {arguments}\nresult=$?\nprintf '\\n'\nif [ $result -eq 0 ]; then\n  printf '{title} is connected. Return to Tandem and choose Retry.\\n'\nelse\n  printf '{title} login did not complete. You can retry this command or close the window.\\n'\nfi\nprintf '\\nPress any key to close…'\nread -k 1\n",
+        shell_quote(&command_path(&executable)),
+        shell_quote(&executable.to_string_lossy())
+    );
+    fs::write(&script, contents)
+        .map_err(|error| format!("Could not prepare {title} login: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Could not prepare {title} login permissions: {error}"))?;
+    }
+    Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg("Terminal")
+        .arg(&script)
+        .spawn()
+        .map_err(|error| format!("Could not open Terminal for {title}: {error}"))?;
+    Ok(format!("{title} login opened in Terminal."))
+}
+
+#[tauri::command]
+fn reveal_connection_log() -> Result<(), String> {
+    let path = tandem_home().join("logs").join("codex-app-server.log");
+    if !path.exists() {
+        return Err("No Codex connection log exists yet.".into());
+    }
+    Command::new("/usr/bin/open")
+        .arg("-R")
+        .arg(&path)
+        .spawn()
+        .map_err(|error| format!("Could not reveal the connection log: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -158,6 +270,7 @@ fn desktop_tasks() -> Vec<TaskView> {
 #[tauri::command]
 fn start_codex(
     project_root: String,
+    force_restart: Option<bool>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<CodexEndpoint, String> {
@@ -173,9 +286,12 @@ fn start_codex(
         .lock()
         .map_err(|_| "Codex state is unavailable.")?;
 
-    if let Some(existing) = process.as_mut() {
+    if force_restart.unwrap_or(false) {
+        *process = None;
+    } else if let Some(existing) = process.as_mut() {
         if existing.project_root == project_root
             && existing.child.try_wait().ok().flatten().is_none()
+            && endpoint_ready(&existing.endpoint)
         {
             return Ok(CodexEndpoint {
                 endpoint: existing.endpoint.clone(),
@@ -187,8 +303,10 @@ fn start_codex(
     let endpoint = reserve_endpoint()?;
     let home = tandem_home();
     let config = read_config(&home);
-    let codex_command = routed_profile(&config, true)
-        .map(|profile| profile.command.clone())
+    let settings = read_desktop_settings(&home);
+    let codex_command = settings
+        .codex_command
+        .or_else(|| routed_profile(&config, true).map(|profile| profile.command.clone()))
         .unwrap_or_else(|| "codex".into());
     let executable = resolve_command(&codex_command)
         .ok_or_else(|| format!("Codex CLI was not found: {codex_command}"))?;
@@ -212,7 +330,7 @@ fn start_codex(
         .try_clone()
         .map_err(|error| format!("Could not prepare Codex app-server logging: {error}"))?;
 
-    let mut command = Command::new(executable);
+    let mut command = Command::new(&executable);
     command
         .arg("app-server")
         .arg("-c")
@@ -234,6 +352,7 @@ fn start_codex(
         // Keep the long-lived server out of macOS-protected project folders.
         // Each Codex thread still receives its selected cwd through thread/start.
         .current_dir(user_home())
+        .env("PATH", command_path(&executable))
         .env("TANDEM_HOME", &home)
         .env("TANDEM_PROJECT_ROOT", &project_root)
         .env("TANDEM_WORKER_ENTRY", &worker_entry)
@@ -243,9 +362,16 @@ fn start_codex(
         .stdout(Stdio::from(app_server_log))
         .stderr(Stdio::from(app_server_error));
 
-    let child = command
+    let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start Codex app-server: {error}"))?;
+    if let Err(error) = wait_for_endpoint(&endpoint, &mut child, Duration::from_secs(12)) {
+        terminate_child(&mut child);
+        return Err(format!(
+            "{error} {}",
+            recent_log_hint(&home.join("logs").join("codex-app-server.log"))
+        ));
+    }
     *process = Some(CodexProcess {
         child,
         endpoint: endpoint.clone(),
@@ -310,6 +436,19 @@ fn read_config(home: &Path) -> TandemConfig {
         return fallback;
     };
     serde_json::from_str(&raw).unwrap_or(fallback)
+}
+
+fn read_desktop_settings(home: &Path) -> DesktopSettings {
+    let Ok(raw) = fs::read_to_string(home.join("desktop-settings.json")) else {
+        return DesktopSettings::default();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn clean_command(command: Option<String>) -> Option<String> {
+    command
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn routed_profile(config: &TandemConfig, outer: bool) -> Option<&Profile> {
@@ -459,11 +598,12 @@ fn read_task_events(connection: &Connection, task_id: &str) -> Vec<TaskEventView
         .unwrap_or_default()
 }
 
-fn probe_command(command: &str) -> SubscriptionStatus {
+fn probe_command(command: &str, provider: &str) -> SubscriptionStatus {
     let executable = resolve_command(command);
     let version = executable.as_ref().and_then(|path| {
         Command::new(path)
             .arg("--version")
+            .env("PATH", command_path(path))
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()
@@ -471,20 +611,37 @@ fn probe_command(command: &str) -> SubscriptionStatus {
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
     });
+    let (authenticated, auth_label, error) = executable
+        .as_ref()
+        .map(|path| probe_authentication(path, provider))
+        .unwrap_or((None, None, Some(format!("{provider} CLI was not found."))));
     SubscriptionStatus {
         command: command.into(),
+        resolved_path: executable
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
         installed: executable.is_some(),
         version,
+        authenticated,
+        auth_label,
+        error,
     }
 }
 
 fn resolve_command(command: &str) -> Option<PathBuf> {
     let direct = PathBuf::from(command);
-    if direct.components().count() > 1 && direct.exists() {
+    if direct.components().count() > 1 && direct.is_file() {
         return Some(direct);
     }
+
+    if let Some(path) = resolve_from_path(command) {
+        return Some(path);
+    }
+
     let output = Command::new("/bin/zsh")
-        .arg("-lc")
+        // Finder-launched apps do not inherit interactive shell PATH entries.
+        // Loading the user's interactive shell restores NVM/asdf/Homebrew setup.
+        .arg("-lic")
         .arg(format!("command -v {}", shell_quote(command)))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -494,11 +651,139 @@ fn resolve_command(command: &str) -> Option<PathBuf> {
         return None;
     }
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(path))
+    if !path.is_empty() {
+        let resolved = PathBuf::from(path);
+        if resolved.is_file() {
+            return Some(resolved);
+        }
     }
+
+    resolve_from_known_locations(command)
+}
+
+fn resolve_from_path(command: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .map(|directory| directory.join(command))
+        .find(|candidate| candidate.is_file())
+}
+
+fn resolve_from_known_locations(command: &str) -> Option<PathBuf> {
+    let home = user_home();
+    let direct_locations = [
+        home.join(".local").join("bin").join(command),
+        home.join(".cargo").join("bin").join(command),
+        home.join(".bun").join("bin").join(command),
+        home.join(".asdf").join("shims").join(command),
+        home.join("Library").join("pnpm").join(command),
+        PathBuf::from("/opt/homebrew/bin").join(command),
+        PathBuf::from("/usr/local/bin").join(command),
+        PathBuf::from("/Applications/ChatGPT.app/Contents/Resources").join(command),
+    ];
+    if let Some(found) = direct_locations
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    {
+        return Some(found);
+    }
+
+    let versions = home.join(".nvm").join("versions").join("node");
+    let mut candidates = fs::read_dir(versions)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("bin").join(command))
+        .filter(|candidate| candidate.is_file())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.pop()
+}
+
+fn command_path(executable: &Path) -> String {
+    let mut paths = Vec::<PathBuf>::new();
+    if let Some(parent) = executable.parent() {
+        paths.push(parent.to_path_buf());
+    }
+    let home = user_home();
+    paths.extend([
+        home.join(".local").join("bin"),
+        home.join(".cargo").join("bin"),
+        home.join(".bun").join("bin"),
+        home.join(".asdf").join("shims"),
+        home.join("Library").join("pnpm"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+    ]);
+    if let Some(current) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&current));
+    }
+    env::join_paths(paths)
+        .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn probe_authentication(
+    executable: &Path,
+    provider: &str,
+) -> (Option<bool>, Option<String>, Option<String>) {
+    let arguments: &[&str] = if provider == "codex" {
+        &["login", "status"]
+    } else {
+        &["auth", "status"]
+    };
+    let output = Command::new(executable)
+        .args(arguments)
+        .env("PATH", command_path(executable))
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+    let Ok(output) = output else {
+        return (
+            None,
+            None,
+            Some(format!("Could not check {provider} authentication.")),
+        );
+    };
+    if !output.status.success() {
+        return (
+            Some(false),
+            None,
+            Some(format!("{provider} needs to be connected.")),
+        );
+    }
+    if provider == "codex" {
+        let status = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let label = if status.to_lowercase().contains("chatgpt") {
+            "ChatGPT subscription"
+        } else {
+            "Codex authenticated"
+        };
+        return (Some(true), Some(label.into()), None);
+    }
+
+    let value = serde_json::from_slice::<Value>(&output.stdout).ok();
+    let logged_in = value
+        .as_ref()
+        .and_then(|json| json.get("loggedIn"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let subscription = value
+        .as_ref()
+        .and_then(|json| json.get("subscriptionType"))
+        .and_then(Value::as_str)
+        .map(capitalize);
+    let label = subscription
+        .map(|name| format!("Claude {name}"))
+        .unwrap_or_else(|| "Claude authenticated".into());
+    (Some(logged_in), Some(label), None)
 }
 
 fn reserve_endpoint() -> Result<String, String> {
@@ -511,6 +796,45 @@ fn reserve_endpoint() -> Result<String, String> {
     drop(listener);
     std::thread::sleep(Duration::from_millis(10));
     Ok(format!("ws://127.0.0.1:{port}"))
+}
+
+fn endpoint_address(endpoint: &str) -> Option<SocketAddr> {
+    endpoint.strip_prefix("ws://")?.parse().ok()
+}
+
+fn endpoint_ready(endpoint: &str) -> bool {
+    endpoint_address(endpoint)
+        .and_then(|address| TcpStream::connect_timeout(&address, Duration::from_millis(150)).ok())
+        .is_some()
+}
+
+fn wait_for_endpoint(endpoint: &str, child: &mut Child, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if endpoint_ready(endpoint) {
+            return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Could not inspect Codex app-server: {error}"))?
+        {
+            return Err(format!(
+                "Codex app-server exited before it became ready ({status})."
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err("Codex app-server did not become ready within 12 seconds.".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn recent_log_hint(path: &Path) -> String {
+    if path.exists() {
+        format!("Details are available in {}.", path.display())
+    } else {
+        "No Codex app-server log was created.".into()
+    }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -555,6 +879,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
             desktop_tasks,
+            open_provider_login,
+            reveal_connection_log,
+            save_desktop_settings,
             start_codex
         ])
         .build(tauri::generate_context!())
