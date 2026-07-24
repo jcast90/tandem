@@ -1,0 +1,87 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { TandemStore } from "../src/store.js";
+
+const cleanup: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+describe("TandemStore", () => {
+  it("persists nested goals, tasks, transitions, reports, and ordered events", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-store-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+
+    const parent = store.createGoal("Ship the feature");
+    const child = store.createGoal("Implement the feature", parent.id);
+    const task = store.createTask({
+      workOrder: {
+        objective: "Implement the CLI",
+        acceptanceCriteria: ["Help command works"],
+        context: ["Use TypeScript"],
+        goalId: child.id,
+        parentTaskId: null,
+        profileId: null,
+      },
+      profileId: "worker-primary",
+      repoRoot: "/tmp/repo",
+      worktreePath: "/tmp/worktree",
+      branch: "tandem/test",
+      runtime: "process",
+    });
+
+    store.appendEvent(task.id, "worker.started", { pid: 42 });
+    const updated = store.updateTask(task.id, {
+      status: "completed",
+      summary: "Implemented",
+      commitSha: "abc123",
+      report: {
+        status: "completed",
+        summary: "Implemented",
+        evidence: ["help output"],
+        tests: ["pnpm test"],
+        blockers: [],
+        questions: [],
+      },
+    });
+
+    expect(updated.status).toBe("completed");
+    expect(updated.goalId).toBe(child.id);
+    expect(updated.report?.tests).toEqual(["pnpm test"]);
+    expect(store.listEvents(task.id).map((event) => event.type)).toEqual([
+      "task.queued",
+      "worker.started",
+    ]);
+    expect(store.listGoals()[0]?.parentId).toBe(parent.id);
+    store.close();
+  });
+
+  it("resolves unique task prefixes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-prefix-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const task = store.createTask({
+      workOrder: {
+        objective: "Test prefix",
+        acceptanceCriteria: [],
+        context: [],
+        goalId: null,
+        parentTaskId: null,
+        profileId: null,
+      },
+      profileId: "worker-primary",
+      repoRoot: "/tmp/repo",
+      worktreePath: "/tmp/worktree",
+      branch: "tandem/test-prefix",
+      runtime: "process",
+    });
+    expect(store.getTask(task.id.slice(0, 8))?.id).toBe(task.id);
+    store.close();
+  });
+});
