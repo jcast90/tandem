@@ -2,7 +2,8 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -202,6 +203,17 @@ fn start_codex(
             mcp_entry.display()
         ));
     }
+    let logs = home.join("logs");
+    fs::create_dir_all(&logs)
+        .map_err(|error| format!("Could not create Tandem log folder: {error}"))?;
+    let app_server_log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs.join("codex-app-server.log"))
+        .map_err(|error| format!("Could not open Codex app-server log: {error}"))?;
+    let app_server_error = app_server_log
+        .try_clone()
+        .map_err(|error| format!("Could not prepare Codex app-server logging: {error}"))?;
 
     let mut command = Command::new(executable);
     command
@@ -222,15 +234,17 @@ fn start_codex(
         )
         .arg("--listen")
         .arg(&endpoint)
-        .current_dir(&project_root)
+        // Keep the long-lived server out of macOS-protected project folders.
+        // Each Codex thread still receives its selected cwd through thread/start.
+        .current_dir(user_home())
         .env("TANDEM_HOME", &home)
         .env("TANDEM_PROJECT_ROOT", &project_root)
         .env("TANDEM_WORKER_ENTRY", &worker_entry)
         // Codex app-server exits when stdin reaches EOF, even while its WebSocket
         // listener is active. Keep the pipe owned by Child open for its lifetime.
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(app_server_log))
+        .stderr(Stdio::from(app_server_error));
 
     let child = command
         .spawn()
