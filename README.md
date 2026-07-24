@@ -35,6 +35,9 @@ orchestration core:
 - Claude remains the bounded execution worker through the authenticated Claude
   CLI.
 - Projects contain chats in the sidebar.
+- Codex delegation calls bind the resulting Claude task to the active chat.
+- Claude progress, blocked questions, final reports, verification, and isolated
+  commit metadata appear inline while the outer turn continues.
 - Worker activity stays behind an on-demand panel rather than turning the app
   into an IDE or monitoring dashboard.
 - No OpenAI or Anthropic API key is requested, and the app does not use an API
@@ -243,9 +246,11 @@ Adapters expose capability probes and execution/session operations. New
 adapters can therefore add API transports, other providers, or local models
 without changing goals, tasks, events, worktrees, or runtime selection.
 
-Planned follow-ups include API adapters, resumable blocked-worker questions,
-revision rounds in the same worker session, token/cost budgets, task-type
-routing, evaluation suites, and safe worktree cleanup.
+Planned follow-ups include native turn steering, clickable execution steps and
+file-change summaries, lightweight file and terminal viewers, skills/plugin
+selection, resumable blocked-worker questions, revision rounds in the same
+worker session, token/cost budgets, task-type routing, evaluation suites, and
+safe worktree cleanup.
 
 ## Development
 

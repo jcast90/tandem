@@ -15,13 +15,34 @@ export interface Goal {
 export interface Task {
   id: string;
   goalId: string | null;
+  repoRoot: string;
+  worktreePath: string;
   objective: string;
   status: string;
   runtime: string;
   runtimeRef: string | null;
+  commitSha: string | null;
   summary: string | null;
+  report: WorkerReport | null;
   error: string | null;
   updatedAt: string;
+  events: TaskEvent[];
+}
+
+export interface WorkerReport {
+  status: "completed" | "blocked" | "failed";
+  summary: string;
+  evidence: string[];
+  tests: string[];
+  blockers: string[];
+  questions: string[];
+}
+
+export interface TaskEvent {
+  id: number;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface Bootstrap {
@@ -69,6 +90,7 @@ export type CodexItem =
       server: string;
       tool: string;
       status: string;
+      arguments?: unknown;
       result?: unknown;
       error?: unknown;
     }
@@ -82,8 +104,9 @@ export type CodexItem =
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "worker";
   text: string;
+  taskId?: string;
   streaming?: boolean;
 }
 

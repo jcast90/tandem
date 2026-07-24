@@ -10,7 +10,7 @@ import {
   type TaskRecord,
   type WorkerReport,
 } from "../protocol.js";
-import { findExecutable, sanitizeWorkerEnv } from "../process.js";
+import { findExecutable, sanitizeWorkerEnv, truncate } from "../process.js";
 import { logsDir } from "../paths.js";
 import type { WorkerAdapter, WorkerRunResult } from "./types.js";
 
@@ -187,10 +187,26 @@ function extractActivity(event: Record<string, unknown>): Record<string, unknown
   const tool = content.find(
     (item) => isObject(item) && item.type === "tool_use" && typeof item.name === "string"
   );
-  if (!isObject(tool)) return null;
+  if (!isObject(tool) || typeof tool.name !== "string") return null;
   return {
     tool: tool.name,
+    detail: describeToolUse(tool.name, tool.input),
   };
+}
+
+function describeToolUse(name: string, input: unknown): string {
+  if (!isObject(input)) return `Using ${name}`;
+  const path =
+    typeof input.file_path === "string"
+      ? input.file_path
+      : typeof input.path === "string"
+        ? input.path
+        : null;
+  if (path) return `${name}: ${truncate(path, 90)}`;
+  if (typeof input.description === "string") return truncate(input.description, 100);
+  if (typeof input.command === "string") return `${name}: ${truncate(input.command, 90)}`;
+  if (typeof input.pattern === "string") return `${name}: ${truncate(input.pattern, 90)}`;
+  return `Using ${name}`;
 }
 
 function safeJsonObject(line: string): Record<string, unknown> | null {

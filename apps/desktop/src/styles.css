@@ -459,6 +459,138 @@ textarea:focus-visible {
   line-height: 1.5;
 }
 
+.worker-card {
+  width: min(100% - 37px, 700px);
+  margin: 0 0 28px 37px;
+  padding: 15px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 13px;
+  background: oklch(0.15 0.012 330);
+}
+
+.worker-card.running {
+  border-color: oklch(0.35 0.055 330);
+}
+
+.worker-card.completed {
+  border-color: oklch(0.34 0.045 150);
+}
+
+.worker-card.failed {
+  border-color: oklch(0.38 0.07 25);
+}
+
+.worker-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.worker-provider-mark {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--primary-soft);
+  color: oklch(0.91 0.055 330);
+  font-family: Georgia, serif;
+  font-size: 14px;
+}
+
+.worker-card-heading div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.worker-card-heading strong {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.worker-card-heading span:not(.worker-provider-mark) {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.worker-objective {
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.worker-progress,
+.worker-result,
+.worker-questions {
+  display: flex;
+  flex-direction: column;
+}
+
+.worker-progress {
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.worker-progress span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.worker-progress span::before {
+  margin-right: 7px;
+  color: var(--faint);
+  content: "›";
+}
+
+.worker-result {
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.worker-result > p,
+.worker-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.worker-questions {
+  gap: 5px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: oklch(0.22 0.035 75);
+}
+
+.worker-questions strong,
+.worker-questions span,
+.worker-evidence,
+.worker-commit {
+  font-size: 11px;
+}
+
+.worker-questions span {
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.worker-evidence,
+.worker-commit {
+  color: var(--faint);
+}
+
+.worker-error {
+  margin-top: 10px;
+  color: oklch(0.82 0.08 25);
+}
+
 .assistant-mark {
   width: 24px;
   height: 24px;

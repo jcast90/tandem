@@ -4442,10 +4442,20 @@ function extractActivity(event) {
   const tool = content.find(
     (item) => isObject(item) && item.type === "tool_use" && typeof item.name === "string"
   );
-  if (!isObject(tool)) return null;
+  if (!isObject(tool) || typeof tool.name !== "string") return null;
   return {
-    tool: tool.name
+    tool: tool.name,
+    detail: describeToolUse(tool.name, tool.input)
   };
+}
+function describeToolUse(name, input2) {
+  if (!isObject(input2)) return `Using ${name}`;
+  const path = typeof input2.file_path === "string" ? input2.file_path : typeof input2.path === "string" ? input2.path : null;
+  if (path) return `${name}: ${truncate(path, 90)}`;
+  if (typeof input2.description === "string") return truncate(input2.description, 100);
+  if (typeof input2.command === "string") return `${name}: ${truncate(input2.command, 90)}`;
+  if (typeof input2.pattern === "string") return `${name}: ${truncate(input2.pattern, 90)}`;
+  return `Using ${name}`;
 }
 function safeJsonObject(line) {
   try {

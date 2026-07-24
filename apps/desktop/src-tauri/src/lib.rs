@@ -2,8 +2,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    env,
-    fs,
+    env, fs,
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -21,6 +20,13 @@ struct CodexProcess {
     child: Child,
     endpoint: String,
     project_root: String,
+}
+
+impl Drop for CodexProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -46,13 +52,27 @@ struct GoalView {
 struct TaskView {
     id: String,
     goal_id: Option<String>,
+    repo_root: String,
+    worktree_path: String,
     objective: String,
     status: String,
     runtime: String,
     runtime_ref: Option<String>,
+    commit_sha: Option<String>,
     summary: Option<String>,
+    report: Option<Value>,
     error: Option<String>,
     updated_at: String,
+    events: Vec<TaskEventView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskEventView {
+    id: i64,
+    event_type: String,
+    payload: Value,
+    created_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,7 +135,11 @@ fn desktop_bootstrap() -> Result<Bootstrap, String> {
         runtime,
         outer_label: profile_label(outer, "Codex CLI"),
         worker_label: profile_label(worker, "Claude CLI"),
-        codex: probe_command(outer.map(|profile| profile.command.as_str()).unwrap_or("codex")),
+        codex: probe_command(
+            outer
+                .map(|profile| profile.command.as_str())
+                .unwrap_or("codex"),
+        ),
         claude: probe_command(
             worker
                 .map(|profile| profile.command.as_str())
@@ -124,6 +148,11 @@ fn desktop_bootstrap() -> Result<Bootstrap, String> {
         goals,
         tasks,
     })
+}
+
+#[tauri::command]
+fn desktop_tasks() -> Vec<TaskView> {
+    read_tasks(&tandem_home())
 }
 
 #[tauri::command]
@@ -139,10 +168,14 @@ fn start_codex(
         return Err("The selected project is not a folder.".into());
     }
     let project_root = canonical.to_string_lossy().into_owned();
-    let mut process = state.codex.lock().map_err(|_| "Codex state is unavailable.")?;
+    let mut process = state
+        .codex
+        .lock()
+        .map_err(|_| "Codex state is unavailable.")?;
 
     if let Some(existing) = process.as_mut() {
-        if existing.project_root == project_root && existing.child.try_wait().ok().flatten().is_none()
+        if existing.project_root == project_root
+            && existing.child.try_wait().ok().flatten().is_none()
         {
             return Ok(CodexEndpoint {
                 endpoint: existing.endpoint.clone(),
@@ -247,10 +280,7 @@ fn runtime_assets(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> 
         .resource_dir()
         .map_err(|error| format!("Could not locate Tandem desktop resources: {error}"))?;
     let resources = resource_dir.join("resources");
-    Ok((
-        resources.join("mcp-server.mjs"),
-        resources.join("cli.mjs"),
-    ))
+    Ok((resources.join("mcp-server.mjs"), resources.join("cli.mjs")))
 }
 
 fn default_runtime() -> String {
@@ -312,8 +342,7 @@ fn read_ledger(home: &Path) -> (Vec<GoalView>, Vec<TaskView>) {
     let path = home.join("tandem.sqlite");
     let Ok(connection) = Connection::open_with_flags(
         path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ) else {
         return (vec![], vec![]);
     };
@@ -338,32 +367,83 @@ fn read_ledger(home: &Path) -> (Vec<GoalView>, Vec<TaskView>) {
         })
         .unwrap_or_default();
 
-    let tasks = connection
+    let tasks = read_tasks_from_connection(&connection);
+
+    (goals, tasks)
+}
+
+fn read_tasks(home: &Path) -> Vec<TaskView> {
+    let path = home.join("tandem.sqlite");
+    let Ok(connection) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return vec![];
+    };
+    read_tasks_from_connection(&connection)
+}
+
+fn read_tasks_from_connection(connection: &Connection) -> Vec<TaskView> {
+    connection
         .prepare(
-            "SELECT id, goal_id, objective, status, runtime, runtime_ref,
-                    summary, error, updated_at
+            "SELECT id, goal_id, repo_root, worktree_path, objective, status,
+                    runtime, runtime_ref, commit_sha, summary, report_json,
+                    error, updated_at
              FROM tasks ORDER BY updated_at DESC LIMIT 100",
         )
         .and_then(|mut statement| {
             statement
                 .query_map([], |row| {
+                    let task_id: String = row.get(0)?;
+                    let report_json: Option<String> = row.get(10)?;
                     Ok(TaskView {
-                        id: row.get(0)?,
+                        events: read_task_events(connection, &task_id),
+                        id: task_id,
                         goal_id: row.get(1)?,
-                        objective: row.get(2)?,
-                        status: row.get(3)?,
-                        runtime: row.get(4)?,
-                        runtime_ref: row.get(5)?,
-                        summary: row.get(6)?,
-                        error: row.get(7)?,
-                        updated_at: row.get(8)?,
+                        repo_root: row.get(2)?,
+                        worktree_path: row.get(3)?,
+                        objective: row.get(4)?,
+                        status: row.get(5)?,
+                        runtime: row.get(6)?,
+                        runtime_ref: row.get(7)?,
+                        commit_sha: row.get(8)?,
+                        summary: row.get(9)?,
+                        report: report_json
+                            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok()),
+                        error: row.get(11)?,
+                        updated_at: row.get(12)?,
                     })
                 })?
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    (goals, tasks)
+fn read_task_events(connection: &Connection, task_id: &str) -> Vec<TaskEventView> {
+    connection
+        .prepare(
+            "SELECT id, type, payload_json, created_at
+             FROM task_events WHERE task_id = ?
+             ORDER BY id DESC LIMIT 12",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([task_id], |row| {
+                    let payload_json: String = row.get(2)?;
+                    Ok(TaskEventView {
+                        id: row.get(0)?,
+                        event_type: row.get(1)?,
+                        payload: serde_json::from_str(&payload_json).unwrap_or(Value::Null),
+                        created_at: row.get(3)?,
+                    })
+                })?
+                .collect()
+        })
+        .map(|mut events: Vec<TaskEventView>| {
+            events.reverse();
+            events
+        })
+        .unwrap_or_default()
 }
 
 fn probe_command(command: &str) -> SubscriptionStatus {
@@ -434,7 +514,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_websocket::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![desktop_bootstrap, start_codex])
+        .invoke_handler(tauri::generate_handler![
+            desktop_bootstrap,
+            desktop_tasks,
+            start_codex
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Tandem desktop");
 }

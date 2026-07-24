@@ -21831,7 +21831,7 @@ function workOrderFromInput(input) {
 // ../../src/mcp-server.ts
 var projectRoot = process.env.TANDEM_PROJECT_ROOT ?? process.cwd();
 var service = new TandemService();
-var instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Delegate bounded implementation work through tandem_delegate instead of doing all execution yourself. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. Use tandem_task_wait/status to follow progress. When a worker completes, review its isolated commit with git show <commitSha>; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch\u2014tell the user to run tandem apply <taskId> after review.`;
+var instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Delegate bounded implementation work through tandem_delegate instead of doing all execution yourself. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch\u2014tell the user to run tandem apply <taskId> after review.`;
 var server = new McpServer(
   {
     name: "tandem",
@@ -21939,7 +21939,27 @@ server.registerTool(
     },
     annotations: { readOnlyHint: true }
   },
-  async ({ task_id, after_event_id, timeout_seconds }) => toolResult(await service.waitForTask(task_id, after_event_id ?? 0, timeout_seconds ?? 25))
+  async ({ task_id, after_event_id, timeout_seconds }, extra) => {
+    const snapshot = await service.waitForTask(
+      task_id,
+      after_event_id ?? 0,
+      timeout_seconds ?? 25
+    );
+    const progressToken = extra._meta?.progressToken;
+    if (progressToken !== void 0) {
+      for (const event of snapshot.events) {
+        await extra.sendNotification({
+          method: "notifications/progress",
+          params: {
+            progressToken,
+            progress: event.id,
+            message: progressMessage(event)
+          }
+        });
+      }
+    }
+    return toolResult(snapshot);
+  }
 );
 server.registerTool(
   "tandem_task_cancel",
@@ -21969,4 +21989,10 @@ function toolResult(value) {
       }
     ]
   };
+}
+function progressMessage(event) {
+  if (typeof event.payload.detail === "string") return event.payload.detail;
+  if (typeof event.payload.summary === "string") return event.payload.summary;
+  if (typeof event.payload.tool === "string") return `Claude is using ${event.payload.tool}`;
+  return event.type.replaceAll(".", " ");
 }

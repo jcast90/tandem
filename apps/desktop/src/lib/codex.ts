@@ -182,6 +182,16 @@ export class CodexConnection {
       if (activity) this.events.onActivity(activity);
       return;
     }
+    if (message.method === "item/mcpToolCall/progress") {
+      const itemId = String(params.itemId ?? "");
+      this.events.onActivity({
+        id: itemId,
+        label: "Claude is working",
+        detail: String(params.message ?? "Worker progress"),
+        status: "running",
+      });
+      return;
+    }
     if (message.method === "turn/completed") {
       this.events.onTurnComplete();
       return;

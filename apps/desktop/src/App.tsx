@@ -56,6 +56,12 @@ export function App() {
     return next;
   }, []);
 
+  const refreshTasks = useCallback(async () => {
+    const tasks = await invoke<Task[]>("desktop_tasks");
+    setBootstrap((current) => ({ ...current, tasks }));
+    return tasks;
+  }, []);
+
   const connect = useCallback(
     async (projectRoot: string) => {
       connectionRef.current?.close();
@@ -70,6 +76,13 @@ export function App() {
         onItem: (item, complete) => {
           if (item.type === "agentMessage" && complete) {
             setMessages((current) => completeAssistantMessage(current, item));
+          }
+          if (item.type === "mcpToolCall" && complete) {
+            const delegated = delegatedTaskFromItem(item);
+            if (delegated) {
+              setMessages((current) => appendWorkerMessage(current, item.id, delegated));
+              void refreshTasks();
+            }
           }
         },
         onTurnComplete: () => {
@@ -93,7 +106,7 @@ export function App() {
       setThreads(recent);
       setConnectionState("ready");
     },
-    [refreshBootstrap]
+    [refreshBootstrap, refreshTasks]
   );
 
   useEffect(() => {
@@ -128,7 +141,45 @@ export function App() {
       top: scrollRef.current.scrollHeight,
       behavior: generating ? "smooth" : "auto",
     });
-  }, [messages, activities, generating]);
+  }, [messages, activities, bootstrap.tasks, generating]);
+
+  const conversationTaskIds = useMemo(
+    () =>
+      messages
+        .filter((message) => message.role === "worker" && message.taskId)
+        .map((message) => message.taskId!),
+    [messages]
+  );
+  const conversationTaskKey = conversationTaskIds.join(",");
+
+  useEffect(() => {
+    if (!conversationTaskKey) return;
+    let canceled = false;
+    let interval: number | undefined;
+    const poll = async () => {
+      try {
+        const tasks = await refreshTasks();
+        if (canceled) return;
+        const byId = new Map(tasks.map((task) => [task.id, task]));
+        const stillActive = conversationTaskIds.some((id) => {
+          const task = byId.get(id);
+          return !task || ["queued", "preparing", "running"].includes(task.status);
+        });
+        if (!stillActive && interval !== undefined) {
+          window.clearInterval(interval);
+          interval = undefined;
+        }
+      } catch {
+        // The next poll or the outer turn completion will refresh the ledger.
+      }
+    };
+    interval = window.setInterval(() => void poll(), 900);
+    void poll();
+    return () => {
+      canceled = true;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [conversationTaskKey, conversationTaskIds, refreshTasks]);
 
   const projectThreads = useMemo(
     () => threads.filter((thread) => thread.cwd === activeProject),
@@ -144,6 +195,10 @@ export function App() {
   const visibleActivities = useMemo(
     () => mergeTaskActivities(activities, bootstrap.tasks),
     [activities, bootstrap.tasks]
+  );
+  const taskById = useMemo(
+    () => new Map(bootstrap.tasks.map((task) => [task.id, task])),
+    [bootstrap.tasks]
   );
 
   const chooseProject = async () => {
@@ -355,19 +410,27 @@ export function App() {
             <EmptyConversation project={projectName(activeProject)} />
           ) : (
             <div className="message-column">
-              {messages.map((message) => (
-                <article className={`message ${message.role}`} key={message.id}>
-                  {message.role === "assistant" && (
-                    <div className="assistant-mark" aria-label="Tandem">
-                      <span />
-                      <span />
+              {messages.map((message) =>
+                message.role === "worker" && message.taskId ? (
+                  <WorkerCard
+                    key={message.id}
+                    task={taskById.get(message.taskId)}
+                    fallbackObjective={message.text}
+                  />
+                ) : (
+                  <article className={`message ${message.role}`} key={message.id}>
+                    {message.role === "assistant" && (
+                      <div className="assistant-mark" aria-label="Tandem">
+                        <span />
+                        <span />
+                      </div>
+                    )}
+                    <div className="message-text">
+                      {message.text || (message.streaming ? "Thinking…" : "")}
                     </div>
-                  )}
-                  <div className="message-text">
-                    {message.text || (message.streaming ? "Thinking…" : "")}
-                  </div>
-                </article>
-              ))}
+                  </article>
+                )
+              )}
               {generating && !messages.some((message) => message.streaming) && (
                 <div className="thinking-row">
                   <span />
@@ -512,6 +575,84 @@ function EmptyConversation({ project }: { project: string }) {
   );
 }
 
+function WorkerCard({
+  task,
+  fallbackObjective,
+}: {
+  task: Task | undefined;
+  fallbackObjective: string;
+}) {
+  const status = task?.status ?? "preparing";
+  const report = task?.report;
+  const progress = (task?.events ?? [])
+    .filter((event) => event.eventType === "worker.activity")
+    .slice(-3);
+  const statusLabel =
+    status === "completed"
+      ? "Completed"
+      : status === "blocked"
+        ? "Needs input"
+        : status === "failed"
+          ? "Failed"
+          : status === "canceled"
+            ? "Canceled"
+            : status === "running"
+              ? "Working"
+              : "Starting";
+  const statusClass =
+    status === "completed"
+      ? "completed"
+      : status === "blocked" || status === "failed"
+        ? "failed"
+        : "running";
+
+  return (
+    <article className={`worker-card ${statusClass}`}>
+      <div className="worker-card-heading">
+        <span className="worker-provider-mark" aria-hidden="true">
+          C
+        </span>
+        <div>
+          <strong>Claude worker</strong>
+          <span>{statusLabel}</span>
+        </div>
+        <i className={`activity-status ${statusClass}`} aria-hidden="true" />
+      </div>
+      <p className="worker-objective">{task?.objective ?? fallbackObjective}</p>
+
+      {progress.length > 0 && !report && (
+        <div className="worker-progress">
+          {progress.map((event) => (
+            <span key={event.id}>{workerEventLabel(event.payload)}</span>
+          ))}
+        </div>
+      )}
+
+      {report && (
+        <div className="worker-result">
+          <p>{report.summary}</p>
+          {report.questions.length > 0 && (
+            <div className="worker-questions">
+              <strong>Questions</strong>
+              {report.questions.map((question) => (
+                <span key={question}>{question}</span>
+              ))}
+            </div>
+          )}
+          {report.tests.length > 0 && (
+            <span className="worker-evidence">Verified: {report.tests.join(" · ")}</span>
+          )}
+          {task?.commitSha && (
+            <span className="worker-commit">Isolated commit {task.commitSha.slice(0, 8)}</span>
+          )}
+        </div>
+      )}
+
+      {!report && task?.error && <p className="worker-error">{task.error}</p>}
+    </article>
+  );
+}
+
 function StatusDot({ ready }: { ready: boolean }) {
   return <i className={ready ? "status-dot ready" : "status-dot"} aria-hidden="true" />;
 }
@@ -559,9 +700,81 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
       if (item.type === "agentMessage" && "text" in item && item.text) {
         messages.push({ id: item.id, role: "assistant", text: item.text });
       }
+      if (item.type === "mcpToolCall") {
+        const delegated = delegatedTaskFromItem(item);
+        if (delegated) {
+          messages.push({
+            id: `worker-${item.id}`,
+            role: "worker",
+            text: delegated.objective,
+            taskId: delegated.id,
+          });
+        }
+      }
     }
   }
   return messages;
+}
+
+function appendWorkerMessage(
+  messages: ChatMessage[],
+  itemId: string,
+  task: { id: string; objective: string }
+): ChatMessage[] {
+  if (messages.some((message) => message.role === "worker" && message.taskId === task.id)) {
+    return messages;
+  }
+  return [
+    ...messages,
+    {
+      id: `worker-${itemId}`,
+      role: "worker",
+      text: task.objective,
+      taskId: task.id,
+    },
+  ];
+}
+
+function delegatedTaskFromItem(item: CodexItem): { id: string; objective: string } | null {
+  if (item.type !== "mcpToolCall" || item.tool !== "tandem_delegate" || !item.result) {
+    return null;
+  }
+  const result = item.result;
+  if (!isRecord(result)) return null;
+  const structured = result.structuredContent;
+  const direct = delegatedTaskFromValue(structured);
+  if (direct) return direct;
+
+  const content = result.content;
+  if (!Array.isArray(content)) return null;
+  for (const part of content) {
+    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") continue;
+    try {
+      const parsed: unknown = JSON.parse(part.text);
+      const task = delegatedTaskFromValue(parsed);
+      if (task) return task;
+    } catch {
+      // Ignore non-JSON tool content.
+    }
+  }
+  return null;
+}
+
+function delegatedTaskFromValue(value: unknown): { id: string; objective: string } | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.objective !== "string") {
+    return null;
+  }
+  return { id: value.id, objective: value.objective };
+}
+
+function workerEventLabel(payload: Record<string, unknown>): string {
+  if (typeof payload.detail === "string") return payload.detail;
+  if (typeof payload.tool === "string") return `Using ${payload.tool}`;
+  return "Claude reported progress";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function activitiesFromThread(thread: CodexThread): Activity[] {
