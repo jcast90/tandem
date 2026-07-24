@@ -149,7 +149,11 @@ struct DesktopSettings {
 }
 
 #[tauri::command]
-fn desktop_bootstrap() -> Result<Bootstrap, String> {
+async fn desktop_bootstrap() -> Result<Bootstrap, String> {
+    run_blocking(desktop_bootstrap_blocking).await
+}
+
+fn desktop_bootstrap_blocking() -> Result<Bootstrap, String> {
     let home = tandem_home();
     let config = read_config(&home);
     let settings = read_desktop_settings(&home);
@@ -189,9 +193,16 @@ fn desktop_bootstrap() -> Result<Bootstrap, String> {
 }
 
 #[tauri::command]
-fn save_desktop_settings(
+async fn save_desktop_settings(
     settings: DesktopSettings,
-    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Bootstrap, String> {
+    run_blocking(move || save_desktop_settings_blocking(settings, &app)).await
+}
+
+fn save_desktop_settings_blocking(
+    settings: DesktopSettings,
+    app: &tauri::AppHandle,
 ) -> Result<Bootstrap, String> {
     let settings = DesktopSettings {
         codex_command: clean_command(settings.codex_command),
@@ -207,14 +218,19 @@ fn save_desktop_settings(
         .map_err(|error| format!("Could not save Tandem settings: {error}"))?;
     fs::rename(&temporary, home.join("desktop-settings.json"))
         .map_err(|error| format!("Could not finish saving Tandem settings: {error}"))?;
+    let state = app.state::<AppState>();
     if let Ok(mut process) = state.codex.lock() {
         *process = None;
     }
-    desktop_bootstrap()
+    desktop_bootstrap_blocking()
 }
 
 #[tauri::command]
-fn open_provider_login(provider: String) -> Result<String, String> {
+async fn open_provider_login(provider: String) -> Result<String, String> {
+    run_blocking(move || open_provider_login_blocking(provider)).await
+}
+
+fn open_provider_login_blocking(provider: String) -> Result<String, String> {
     if provider != "codex" && provider != "claude" {
         return Err("Unknown provider.".into());
     }
@@ -281,31 +297,41 @@ fn reveal_connection_log() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn desktop_tasks() -> Vec<TaskView> {
-    read_tasks(&tandem_home())
+async fn desktop_tasks() -> Result<Vec<TaskView>, String> {
+    run_blocking(|| Ok(read_tasks(&tandem_home()))).await
 }
 
 #[tauri::command]
-fn desktop_task_cancel(task_id: String, app: tauri::AppHandle) -> Result<TaskView, String> {
-    run_tandem_task_command(&app, &["task", "cancel", &task_id])?;
-    find_task(&task_id)
+async fn desktop_task_cancel(task_id: String, app: tauri::AppHandle) -> Result<TaskView, String> {
+    run_blocking(move || {
+        run_tandem_task_command(&app, &["task", "cancel", &task_id])?;
+        find_task(&task_id)
+    })
+    .await
 }
 
 #[tauri::command]
-fn desktop_task_steer(
+async fn desktop_task_steer(
     task_id: String,
     message: String,
     app: tauri::AppHandle,
 ) -> Result<TaskView, String> {
-    if message.trim().is_empty() {
-        return Err("Steering guidance cannot be empty.".into());
-    }
-    run_tandem_task_command(&app, &["task", "steer", &task_id, message.trim()])?;
-    find_task(&task_id)
+    run_blocking(move || {
+        if message.trim().is_empty() {
+            return Err("Steering guidance cannot be empty.".into());
+        }
+        run_tandem_task_command(&app, &["task", "steer", &task_id, message.trim()])?;
+        find_task(&task_id)
+    })
+    .await
 }
 
 #[tauri::command]
-fn desktop_task_files(task_id: String) -> Result<Vec<TaskFileView>, String> {
+async fn desktop_task_files(task_id: String) -> Result<Vec<TaskFileView>, String> {
+    run_blocking(move || desktop_task_files_blocking(task_id)).await
+}
+
+fn desktop_task_files_blocking(task_id: String) -> Result<Vec<TaskFileView>, String> {
     let task = find_task(&task_id)?;
     let worktree = PathBuf::from(&task.worktree_path);
     let mut files = Vec::<TaskFileView>::new();
@@ -376,7 +402,11 @@ fn desktop_task_files(task_id: String) -> Result<Vec<TaskFileView>, String> {
 }
 
 #[tauri::command]
-fn preview_local_file(path: String, project_root: String) -> Result<FilePreview, String> {
+async fn preview_local_file(path: String, project_root: String) -> Result<FilePreview, String> {
+    run_blocking(move || preview_local_file_blocking(path, project_root)).await
+}
+
+fn preview_local_file_blocking(path: String, project_root: String) -> Result<FilePreview, String> {
     let canonical = allowed_local_path(&path, &project_root)?;
     if !canonical.is_file() {
         return Err("That path is not a file.".into());
@@ -425,11 +455,18 @@ fn open_project_terminal(path: String, project_root: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn start_codex(
+async fn start_codex(
     project_root: String,
     force_restart: Option<bool>,
-    state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
+) -> Result<CodexEndpoint, String> {
+    run_blocking(move || start_codex_blocking(project_root, force_restart, &app)).await
+}
+
+fn start_codex_blocking(
+    project_root: String,
+    force_restart: Option<bool>,
+    app: &tauri::AppHandle,
 ) -> Result<CodexEndpoint, String> {
     let canonical = PathBuf::from(&project_root)
         .canonicalize()
@@ -438,6 +475,7 @@ fn start_codex(
         return Err("The selected project is not a folder.".into());
     }
     let project_root = canonical.to_string_lossy().into_owned();
+    let state = app.state::<AppState>();
     let mut process = state
         .codex
         .lock()
@@ -468,7 +506,7 @@ fn start_codex(
     let executable = resolve_command(&codex_command)
         .ok_or_else(|| format!("Codex CLI was not found: {codex_command}"))?;
     let node = resolve_command("node").ok_or("Node.js was not found.")?;
-    let (mcp_entry, worker_entry) = runtime_assets(&app)?;
+    let (mcp_entry, worker_entry) = runtime_assets(app)?;
     if !mcp_entry.exists() {
         return Err(format!(
             "Tandem must be built before launching the desktop app: {}",
@@ -577,6 +615,16 @@ fn runtime_assets(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> 
         .map_err(|error| format!("Could not locate Tandem desktop resources: {error}"))?;
     let resources = resource_dir.join("resources");
     Ok((resources.join("mcp-server.mjs"), resources.join("cli.mjs")))
+}
+
+async fn run_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("Tandem background operation stopped unexpectedly: {error}"))?
 }
 
 fn run_tandem_task_command(app: &tauri::AppHandle, args: &[&str]) -> Result<(), String> {

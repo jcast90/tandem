@@ -1,6 +1,16 @@
 import TauriWebSocket from "@tauri-apps/plugin-websocket";
 
-import type { Activity, CodexItem, CodexThread, PluginOption, SkillOption } from "../types";
+import type {
+  Activity,
+  CodexItem,
+  CodexModel,
+  CodexThread,
+  ComposerAttachment,
+  PermissionMode,
+  PluginOption,
+  SkillOption,
+  TurnOptions,
+} from "../types";
 
 type JsonObject = Record<string, unknown>;
 
@@ -90,11 +100,12 @@ export class CodexConnection {
     return result.data ?? [];
   }
 
-  async startThread(projectRoot: string): Promise<CodexThread> {
+  async startThread(projectRoot: string, options: TurnOptions): Promise<CodexThread> {
+    const permissions = threadPermissions(options.permissionMode);
     const result = (await this.request("thread/start", {
       cwd: projectRoot,
-      approvalPolicy: "never",
-      sandbox: "workspace-write",
+      approvalPolicy: permissions.approvalPolicy,
+      sandbox: permissions.sandbox,
       ephemeral: false,
       threadSource: "appServer",
     })) as { thread: CodexThread };
@@ -156,10 +167,38 @@ export class CodexConnection {
     );
   }
 
-  async sendTurn(threadId: string, text: string, skills: SkillOption[] = []): Promise<string> {
+  async listModels(): Promise<CodexModel[]> {
+    const result = (await this.request("model/list", {
+      limit: 100,
+      includeHidden: false,
+    })) as { data?: CodexModel[] };
+    return result.data ?? [];
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    await this.request("thread/archive", { threadId });
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    await this.request("thread/delete", { threadId });
+  }
+
+  async sendTurn(
+    threadId: string,
+    text: string,
+    skills: SkillOption[] = [],
+    options: TurnOptions
+  ): Promise<string> {
+    const permissions = turnPermissions(options.permissionMode, options.attachments ?? []);
+    const roots = attachmentRoots(options.attachments ?? []);
     const result = (await this.request("turn/start", {
       threadId,
-      input: turnInput(text, skills),
+      input: turnInput(text, skills, options.attachments ?? []),
+      model: options.model ?? undefined,
+      effort: options.effort ?? undefined,
+      approvalPolicy: permissions.approvalPolicy,
+      sandboxPolicy: permissions.sandboxPolicy,
+      runtimeWorkspaceRoots: roots.length > 0 ? roots : undefined,
     })) as { turn: { id: string } };
     return result.turn.id;
   }
@@ -168,12 +207,13 @@ export class CodexConnection {
     threadId: string,
     turnId: string,
     text: string,
-    skills: SkillOption[] = []
+    skills: SkillOption[] = [],
+    attachments: ComposerAttachment[] = []
   ): Promise<void> {
     await this.request("turn/steer", {
       threadId,
       expectedTurnId: turnId,
-      input: turnInput(text, skills),
+      input: turnInput(text, skills, attachments),
     });
   }
 
@@ -333,7 +373,16 @@ export class CodexConnection {
       message.method === "item/commandExecution/requestApproval" ||
       message.method === "item/fileChange/requestApproval"
     ) {
-      void this.send({ id: message.id!, result: { decision: "decline" } });
+      const reason = String(
+        message.params?.reason ??
+          message.params?.command ??
+          (message.method.includes("fileChange") ? "change files" : "run a command")
+      );
+      const accepted = window.confirm(`Allow Codex to ${reason}?`);
+      void this.send({
+        id: message.id!,
+        result: { decision: accepted ? "accept" : "decline" },
+      });
       return;
     }
     void this.send({
@@ -343,11 +392,71 @@ export class CodexConnection {
   }
 }
 
-function turnInput(text: string, skills: SkillOption[]): JsonObject[] {
+function turnInput(
+  text: string,
+  skills: SkillOption[],
+  attachments: ComposerAttachment[]
+): JsonObject[] {
   return [
     ...skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path })),
+    ...attachments.map((attachment) => ({
+      type: "mention",
+      name: attachment.name,
+      path: attachment.path,
+    })),
     { type: "text", text, text_elements: [] },
   ];
+}
+
+function threadPermissions(mode: PermissionMode): {
+  approvalPolicy: "on-request" | "never";
+  sandbox: "workspace-write" | "danger-full-access";
+} {
+  if (mode === "full") {
+    return { approvalPolicy: "never", sandbox: "danger-full-access" };
+  }
+  return {
+    approvalPolicy: mode === "ask" ? "on-request" : "never",
+    sandbox: "workspace-write",
+  };
+}
+
+function turnPermissions(
+  mode: PermissionMode,
+  attachments: ComposerAttachment[]
+): {
+  approvalPolicy: "on-request" | "never";
+  sandboxPolicy: JsonObject;
+} {
+  if (mode === "full") {
+    return {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    };
+  }
+  return {
+    approvalPolicy: mode === "ask" ? "on-request" : "never",
+    sandboxPolicy: {
+      type: "workspaceWrite",
+      writableRoots: attachmentRoots(attachments),
+      networkAccess: true,
+    },
+  };
+}
+
+function attachmentRoots(attachments: ComposerAttachment[]): string[] {
+  return Array.from(
+    new Set(
+      attachments.map((attachment) => {
+        if (attachment.kind === "folder") return attachment.path;
+        const separator = Math.max(
+          attachment.path.lastIndexOf("/"),
+          attachment.path.lastIndexOf("\\")
+        );
+        return separator > 0 ? attachment.path.slice(0, separator) : attachment.path;
+      })
+    )
+  );
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

@@ -22,10 +22,14 @@ import type {
   Activity,
   Bootstrap,
   ChatMessage,
+  CodexModel,
   CodexItem,
   CodexThread,
+  ComposerAttachment,
   FilePreview,
+  PermissionMode,
   PluginOption,
+  ProviderRoute,
   SkillOption,
   Task,
   TaskFile,
@@ -90,10 +94,23 @@ export function App() {
   const [filePreview, setFilePreview] = useState<FilePreview | null>(null);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [plugins, setPlugins] = useState<PluginOption[]>([]);
+  const [models, setModels] = useState<CodexModel[]>([]);
   const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [chatMenuId, setChatMenuId] = useState("");
+  const [composerMenu, setComposerMenu] = useState<"add" | "route" | "permission" | null>(null);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("auto");
+  const [providerRoute, setProviderRoute] = useState<ProviderRoute>("auto");
+  const [codexModel, setCodexModel] = useState("");
+  const [codexEffort, setCodexEffort] = useState("");
+  const [claudeModel, setClaudeModel] = useState("");
   const connectionRef = useRef<CodexConnection | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const submissionEpochRef = useRef(0);
+  const allowTurnEventsRef = useRef(false);
+  const activeTurnRef = useRef("");
 
   const refreshBootstrap = useCallback(async () => {
     const next = await invoke<Bootstrap>("desktop_bootstrap");
@@ -112,6 +129,9 @@ export function App() {
   const connect = useCallback(
     async (projectRoot: string, forceRestart = false) => {
       connectionRef.current?.close();
+      submissionEpochRef.current += 1;
+      allowTurnEventsRef.current = false;
+      activeTurnRef.current = "";
       setConnectionState("starting");
       setConnectionError("");
       const { endpoint } = await invoke<{ endpoint: string }>("start_codex", {
@@ -135,12 +155,18 @@ export function App() {
           }
         },
         onTurnStarted: (turnId) => {
+          if (!allowTurnEventsRef.current) return;
+          activeTurnRef.current = turnId;
           setActiveTurnId(turnId);
           setGenerating(true);
         },
-        onTurnComplete: () => {
-          setActiveTurnId("");
-          setGenerating(false);
+        onTurnComplete: (turnId) => {
+          if (activeTurnRef.current === turnId) {
+            activeTurnRef.current = "";
+            allowTurnEventsRef.current = false;
+            setActiveTurnId("");
+            setGenerating(false);
+          }
           void connection.listThreads().then((recent) => {
             setThreads(recent);
             setActiveThread((current) =>
@@ -158,14 +184,27 @@ export function App() {
       connectionRef.current = connection;
       const recent = await connection.listThreads();
       setThreads(recent);
-      void connection
-        .listSkills(projectRoot)
-        .then(setSkills)
-        .catch(() => setSkills([]));
-      void connection
-        .listPlugins(projectRoot)
-        .then(setPlugins)
-        .catch(() => setPlugins([]));
+      try {
+        setSkills(await connection.listSkills(projectRoot));
+      } catch {
+        setSkills([]);
+      }
+      try {
+        setPlugins(await connection.listPlugins(projectRoot));
+      } catch {
+        setPlugins([]);
+      }
+      try {
+        const available = await connection.listModels();
+        setModels(available);
+        const preferred = available.find((model) => model.isDefault) ?? available[0];
+        if (preferred) {
+          setCodexModel((current) => current || preferred.model || preferred.id);
+          setCodexEffort((current) => current || preferred.defaultReasoningEffort || "");
+        }
+      } catch {
+        setModels([]);
+      }
       setConnectionState("ready");
       setConnectionError("");
     },
@@ -277,6 +316,10 @@ export function App() {
     () => new Map(bootstrap.tasks.map((task) => [task.id, task])),
     [bootstrap.tasks]
   );
+  const selectedCodexModel = useMemo(
+    () => models.find((model) => model.model === codexModel || model.id === codexModel),
+    [codexModel, models]
+  );
 
   const chooseProject = async () => {
     const selection = await open({
@@ -295,6 +338,9 @@ export function App() {
     setActivities([]);
     setSelectedSkillPaths([]);
     setSkillsOpen(false);
+    setAttachments([]);
+    setComposerMenu(null);
+    setNewChatOpen(false);
     try {
       await connect(selection);
     } catch (error) {
@@ -311,6 +357,9 @@ export function App() {
     setActivities([]);
     setSelectedSkillPaths([]);
     setSkillsOpen(false);
+    setAttachments([]);
+    setComposerMenu(null);
+    setNewChatOpen(false);
     try {
       await connect(path);
     } catch (error) {
@@ -399,7 +448,90 @@ export function App() {
     setActivities([]);
     setSelectedSkillPaths([]);
     setSkillsOpen(false);
+    setAttachments([]);
+    setComposerMenu(null);
+    setNewChatOpen(false);
     setNotice("");
+  };
+
+  const beginNewChat = async (path: string) => {
+    if (path !== activeProject) {
+      await selectProject(path);
+    }
+    newChat();
+  };
+
+  const chooseNewChatProject = async () => {
+    const selection = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose a project for this chat",
+    });
+    if (typeof selection !== "string") return;
+    const next = uniqueProjects([...projects, { path: selection, name: projectName(selection) }]);
+    setProjects(next);
+    storeProjects(next);
+    await beginNewChat(selection);
+  };
+
+  const addFiles = async () => {
+    const selection = await open({
+      directory: false,
+      multiple: true,
+      title: "Add files as context",
+    });
+    const paths = typeof selection === "string" ? [selection] : (selection ?? []);
+    addAttachments(paths.map((path) => ({ path, name: pathName(path), kind: "file" as const })));
+  };
+
+  const addFolder = async () => {
+    const selection = await open({
+      directory: true,
+      multiple: false,
+      title: "Add a folder as context",
+    });
+    if (typeof selection !== "string") return;
+    addAttachments([{ path: selection, name: pathName(selection), kind: "folder" }]);
+  };
+
+  const addAttachments = (next: ComposerAttachment[]) => {
+    setAttachments((current) => {
+      const byPath = new Map(current.map((attachment) => [attachment.path, attachment]));
+      next.forEach((attachment) => byPath.set(attachment.path, attachment));
+      return [...byPath.values()];
+    });
+    setComposerMenu(null);
+  };
+
+  const removeThread = (threadId: string) => {
+    setThreads((current) => current.filter((thread) => thread.id !== threadId));
+    if (activeThread?.id === threadId) newChat();
+    setChatMenuId("");
+  };
+
+  const archiveChat = async (thread: CodexThread) => {
+    const connection = connectionRef.current;
+    if (!connection) return;
+    try {
+      await connection.archiveThread(thread.id);
+      removeThread(thread.id);
+      setNotice("Chat archived.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const deleteChat = async (thread: CodexThread) => {
+    const connection = connectionRef.current;
+    if (!connection) return;
+    if (!window.confirm(`Delete “${thread.name || thread.preview || "Untitled chat"}”?`)) return;
+    try {
+      await connection.deleteThread(thread.id);
+      removeThread(thread.id);
+      setNotice("Chat deleted.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const submit = async () => {
@@ -408,29 +540,66 @@ export function App() {
     if (!text || !connection || connectionState !== "ready") return;
     setComposer("");
     setNotice("");
+    setChatMenuId("");
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text }]);
     const selectedSkills = skills.filter((skill) => selectedSkillPaths.includes(skill.path));
+    const routedText = routingPrompt(
+      text,
+      providerRoute,
+      claudeModel,
+      claudePermissionMode(permissionMode)
+    );
+    const turnOptions = {
+      model: codexModel || null,
+      effort: codexEffort || null,
+      permissionMode,
+      attachments,
+    };
+    let submissionEpoch: number | null = null;
     try {
       if (generating && activeThread && activeTurnId) {
-        await connection.steerTurn(activeThread.id, activeTurnId, text, selectedSkills);
+        await connection.steerTurn(
+          activeThread.id,
+          activeTurnId,
+          routedText,
+          selectedSkills,
+          attachments
+        );
         setSelectedSkillPaths([]);
         setSkillsOpen(false);
+        setAttachments([]);
+        setComposerMenu(null);
         setNotice("Guidance added to the active Codex turn.");
         return;
       }
+      submissionEpoch = ++submissionEpochRef.current;
+      allowTurnEventsRef.current = true;
       setGenerating(true);
       let thread = activeThread;
       if (!thread) {
-        thread = await connection.startThread(activeProject);
+        thread = await connection.startThread(activeProject, turnOptions);
+        if (submissionEpoch !== submissionEpochRef.current) {
+          await connection.deleteThread(thread.id).catch(() => undefined);
+          return;
+        }
         thread = { ...thread, preview: thread.preview || text };
         setActiveThread(thread);
         setThreads((current) => [thread!, ...current]);
       }
-      const turnId = await connection.sendTurn(thread.id, text, selectedSkills);
+      const turnId = await connection.sendTurn(thread.id, routedText, selectedSkills, turnOptions);
+      if (submissionEpoch !== submissionEpochRef.current) {
+        await connection.interruptTurn(thread.id, turnId).catch(() => undefined);
+        return;
+      }
       setSelectedSkillPaths([]);
       setSkillsOpen(false);
+      setAttachments([]);
+      setComposerMenu(null);
+      activeTurnRef.current = turnId;
       setActiveTurnId(turnId);
     } catch (error) {
+      if (submissionEpoch !== null && submissionEpoch !== submissionEpochRef.current) return;
+      allowTurnEventsRef.current = false;
       setGenerating(false);
       setNotice(error instanceof Error ? error.message : String(error));
     }
@@ -439,16 +608,22 @@ export function App() {
   const stopCurrentWork = async () => {
     const connection = connectionRef.current;
     setNotice("");
+    submissionEpochRef.current += 1;
+    allowTurnEventsRef.current = false;
+    const turnId = activeTurnId;
+    const threadId = activeThread?.id;
+    activeTurnRef.current = "";
+    setActiveTurnId("");
+    setGenerating(false);
+    setNotice("Stopping active work…");
     try {
       const actions: Promise<unknown>[] = projectActiveTasks.map((task) =>
         invoke("desktop_task_cancel", { taskId: task.id })
       );
-      if (connection && activeThread && activeTurnId) {
-        actions.push(connection.interruptTurn(activeThread.id, activeTurnId));
+      if (connection && threadId && turnId) {
+        actions.push(connection.interruptTurn(threadId, turnId));
       }
       await Promise.allSettled(actions);
-      setActiveTurnId("");
-      setGenerating(false);
       await refreshTasks();
       setNotice("Stopped active work in this project.");
     } catch (error) {
@@ -504,10 +679,37 @@ export function App() {
           </button>
         </div>
 
-        <button className="new-chat" type="button" onClick={newChat}>
-          <ComposeIcon />
-          <span>New chat</span>
-        </button>
+        <div className="new-chat-wrap">
+          <button
+            className="new-chat"
+            type="button"
+            onClick={() => setNewChatOpen((open) => !open)}
+            aria-expanded={newChatOpen}
+          >
+            <ComposeIcon />
+            <span>New chat</span>
+          </button>
+          {newChatOpen && (
+            <div className="new-chat-menu">
+              <span>Start in</span>
+              {projects.map((project) => (
+                <button
+                  type="button"
+                  key={project.path}
+                  onClick={() => void beginNewChat(project.path)}
+                >
+                  <FolderIcon />
+                  <span>{project.name}</span>
+                  {project.path === activeProject && <i>Current</i>}
+                </button>
+              ))}
+              <button type="button" onClick={() => void chooseNewChatProject()}>
+                <PlusIcon />
+                <span>Choose another folder…</span>
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="sidebar-scroll">
           <div className="section-heading">
@@ -530,27 +732,65 @@ export function App() {
                 : threads.filter((thread) => thread.cwd === project.path);
               return (
                 <div className="project-group" key={project.path}>
-                  <button
-                    className={`project-button ${selected ? "selected" : ""}`}
-                    type="button"
-                    onClick={() => void selectProject(project.path)}
-                  >
-                    <FolderIcon />
-                    <span>{project.name}</span>
-                    <ChevronIcon className={selected ? "chevron open" : "chevron"} />
-                  </button>
+                  <div className={`project-row ${selected ? "selected" : ""}`}>
+                    <button
+                      className={`project-button ${selected ? "selected" : ""}`}
+                      type="button"
+                      onClick={() => void selectProject(project.path)}
+                    >
+                      <FolderIcon />
+                      <span>{project.name}</span>
+                      <ChevronIcon className={selected ? "chevron open" : "chevron"} />
+                    </button>
+                    <button
+                      className="project-new-chat"
+                      type="button"
+                      aria-label={`New chat in ${project.name}`}
+                      title={`New chat in ${project.name}`}
+                      onClick={() => void beginNewChat(project.path)}
+                    >
+                      <ComposeIcon />
+                    </button>
+                  </div>
                   {selected && (
                     <div className="chat-list">
-                      {chats.slice(0, 12).map((thread) => (
-                        <button
-                          className={activeThread?.id === thread.id ? "chat selected" : "chat"}
-                          type="button"
-                          key={thread.id}
-                          onClick={() => void selectThread(thread)}
-                        >
-                          {thread.name || thread.preview || "Untitled chat"}
-                        </button>
-                      ))}
+                      {chats.slice(0, 12).map((thread) => {
+                        const menuOpen = chatMenuId === thread.id;
+                        return (
+                          <div className="chat-row" key={thread.id}>
+                            <button
+                              className={activeThread?.id === thread.id ? "chat selected" : "chat"}
+                              type="button"
+                              onClick={() => void selectThread(thread)}
+                            >
+                              {thread.name || thread.preview || "Untitled chat"}
+                            </button>
+                            <button
+                              className="chat-actions"
+                              type="button"
+                              aria-label="Chat actions"
+                              aria-expanded={menuOpen}
+                              onClick={() => setChatMenuId(menuOpen ? "" : thread.id)}
+                            >
+                              •••
+                            </button>
+                            {menuOpen && (
+                              <div className="chat-actions-menu">
+                                <button type="button" onClick={() => void archiveChat(thread)}>
+                                  Archive
+                                </button>
+                                <button
+                                  className="danger"
+                                  type="button"
+                                  onClick={() => void deleteChat(thread)}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                       {chats.length === 0 && (
                         <p className="empty-chats">Your first chat will appear here.</p>
                       )}
@@ -763,10 +1003,186 @@ export function App() {
                   )}
                 </div>
               )}
+              {composerMenu === "add" && (
+                <div className="composer-popover add-menu">
+                  <strong>Add context</strong>
+                  <button type="button" onClick={() => void addFiles()}>
+                    <FileIcon />
+                    <span>
+                      <b>Files</b>
+                      <small>Reference one or more local files</small>
+                    </span>
+                  </button>
+                  <button type="button" onClick={() => void addFolder()}>
+                    <FolderIcon />
+                    <span>
+                      <b>Folder</b>
+                      <small>Add a directory to the working context</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setComposerMenu(null);
+                      setSkillsOpen(true);
+                    }}
+                  >
+                    <span className="menu-glyph">◎</span>
+                    <span>
+                      <b>Skills and plugins</b>
+                      <small>Choose enabled Codex capabilities</small>
+                    </span>
+                  </button>
+                </div>
+              )}
+              {composerMenu === "permission" && (
+                <div className="composer-popover permission-menu">
+                  <strong>Permissions</strong>
+                  {(
+                    [
+                      ["ask", "Ask for approval", "Confirm commands and file changes"],
+                      ["auto", "Auto approve", "Work inside the selected project"],
+                      ["full", "Full access", "Unrestricted files and network"],
+                    ] as const
+                  ).map(([mode, label, detail]) => (
+                    <button
+                      className={permissionMode === mode ? "selected" : ""}
+                      type="button"
+                      key={mode}
+                      onClick={() => {
+                        setPermissionMode(mode);
+                        setComposerMenu(null);
+                      }}
+                    >
+                      <span>
+                        <b>{label}</b>
+                        <small>{detail}</small>
+                      </span>
+                      {permissionMode === mode && <i>✓</i>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {composerMenu === "route" && (
+                <div className="composer-popover route-menu">
+                  <strong>Who should handle this?</strong>
+                  <div className="route-options">
+                    {(
+                      [
+                        ["auto", "Auto", "Codex decides when Claude should execute"],
+                        ["codex", "Codex", "Keep the work with the outer agent"],
+                        ["claude", "Claude", "Delegate this request to a worker"],
+                      ] as const
+                    ).map(([route, label, detail]) => (
+                      <button
+                        className={providerRoute === route ? "selected" : ""}
+                        type="button"
+                        key={route}
+                        onClick={() => setProviderRoute(route)}
+                      >
+                        <span>
+                          <b>{label}</b>
+                          <small>{detail}</small>
+                        </span>
+                        {providerRoute === route && <i>✓</i>}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="route-models">
+                    <span>{providerRoute === "claude" ? "Claude model" : "Codex model"}</span>
+                    {providerRoute === "claude" ? (
+                      <div className="model-pills">
+                        {[
+                          ["", "Default"],
+                          ["opus", "Opus"],
+                          ["sonnet", "Sonnet"],
+                          ["haiku", "Haiku"],
+                        ].map(([value, label]) => (
+                          <button
+                            className={claudeModel === value ? "selected" : ""}
+                            type="button"
+                            key={label}
+                            onClick={() => setClaudeModel(value)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="model-list">
+                          {models.map((model) => (
+                            <button
+                              className={
+                                codexModel === model.model || codexModel === model.id
+                                  ? "selected"
+                                  : ""
+                              }
+                              type="button"
+                              key={model.id}
+                              onClick={() => {
+                                setCodexModel(model.model || model.id);
+                                setCodexEffort(model.defaultReasoningEffort || "");
+                              }}
+                            >
+                              <span>
+                                <b>{model.displayName}</b>
+                                <small>{model.description}</small>
+                              </span>
+                              {(codexModel === model.model || codexModel === model.id) && <i>✓</i>}
+                            </button>
+                          ))}
+                        </div>
+                        {selectedCodexModel?.supportedReasoningEfforts.length ? (
+                          <>
+                            <span>Reasoning</span>
+                            <div className="model-pills">
+                              {selectedCodexModel.supportedReasoningEfforts.map((option) => (
+                                <button
+                                  className={
+                                    codexEffort === option.reasoningEffort ? "selected" : ""
+                                  }
+                                  type="button"
+                                  key={option.reasoningEffort}
+                                  onClick={() => setCodexEffort(option.reasoningEffort)}
+                                >
+                                  {titleCase(option.reasoningEffort)}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="composer">
+                {attachments.length > 0 && (
+                  <div className="attachment-row">
+                    {attachments.map((attachment) => (
+                      <span className="attachment-chip" key={attachment.path}>
+                        {attachment.kind === "folder" ? <FolderIcon /> : <FileIcon />}
+                        <span title={attachment.path}>{attachment.name}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAttachments((current) =>
+                              current.filter((item) => item.path !== attachment.path)
+                            )
+                          }
+                          aria-label={`Remove ${attachment.name}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   value={composer}
                   onChange={(event) => setComposer(event.target.value)}
+                  onFocus={() => setChatMenuId("")}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -786,22 +1202,55 @@ export function App() {
                 />
                 <div className="composer-meta">
                   <button
-                    className={skillsOpen ? "skill-picker active" : "skill-picker"}
+                    className={
+                      composerMenu === "add" ? "composer-control active" : "composer-control"
+                    }
                     type="button"
-                    onClick={() => setSkillsOpen((open) => !open)}
+                    onClick={() => {
+                      setChatMenuId("");
+                      setComposerMenu((current) => (current === "add" ? null : "add"));
+                    }}
+                    aria-label="Add files, folders, skills, or plugins"
                   >
                     <PlusIcon />
-                    Skills
-                    {selectedSkillPaths.length > 0 && <b>{selectedSkillPaths.length}</b>}
+                    {(attachments.length > 0 || selectedSkillPaths.length > 0) && (
+                      <b>{attachments.length + selectedSkillPaths.length}</b>
+                    )}
                   </button>
-                  <span>
-                    <i className="provider-dot codex" />
-                    {generating ? "Steering Codex" : "Codex plans"}
-                  </span>
-                  <span>
-                    <i className="provider-dot claude" />
-                    Claude executes
-                  </span>
+                  <button
+                    className={
+                      composerMenu === "permission"
+                        ? `permission-control ${permissionMode} active`
+                        : `permission-control ${permissionMode}`
+                    }
+                    type="button"
+                    onClick={() => {
+                      setChatMenuId("");
+                      setComposerMenu((current) =>
+                        current === "permission" ? null : "permission"
+                      );
+                    }}
+                  >
+                    {permissionLabel(permissionMode)}
+                  </button>
+                  <button
+                    className={composerMenu === "route" ? "route-control active" : "route-control"}
+                    type="button"
+                    onClick={() => {
+                      setChatMenuId("");
+                      setComposerMenu((current) => (current === "route" ? null : "route"));
+                    }}
+                  >
+                    <span>{routeLabel(providerRoute)}</span>
+                    <small>
+                      {providerRoute === "claude"
+                        ? claudeModel
+                          ? titleCase(claudeModel)
+                          : "Default"
+                        : selectedCodexModel?.displayName || "Codex"}
+                    </small>
+                    <ChevronIcon />
+                  </button>
                 </div>
                 {(generating || projectActiveTasks.length > 0) && (
                   <button
@@ -1182,6 +1631,53 @@ function projectName(path: string): string {
   return normalized.split("/").pop() || "Project";
 }
 
+function pathName(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).pop() || path;
+}
+
+function titleCase(value: string): string {
+  return value.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function routeLabel(route: ProviderRoute): string {
+  if (route === "claude") return "Claude";
+  if (route === "codex") return "Codex";
+  return "Auto";
+}
+
+function permissionLabel(mode: PermissionMode): string {
+  if (mode === "ask") return "Ask approval";
+  if (mode === "full") return "Full access";
+  return "Auto approve";
+}
+
+function claudePermissionMode(mode: PermissionMode): string {
+  if (mode === "ask") return "default";
+  if (mode === "full") return "bypassPermissions";
+  return "acceptEdits";
+}
+
+function routingPrompt(
+  text: string,
+  route: ProviderRoute,
+  claudeModel: string,
+  workerPermission: string
+): string {
+  if (route === "auto") return text;
+  const directive =
+    route === "codex"
+      ? "Handle this request with Codex only. Do not call tandem_delegate."
+      : `Delegate this entire request through tandem_delegate, wait for the worker, and report its result. Pass permission_mode="${workerPermission}"${
+          claudeModel ? ` and model="${claudeModel}"` : ""
+        } to tandem_delegate.`;
+  return `${text}\n\n<tandem-routing>${directive}</tandem-routing>`;
+}
+
+function visibleUserText(text: string): string {
+  return text.replace(/\n*\n*<tandem-routing>[\s\S]*?<\/tandem-routing>/g, "").trim();
+}
+
 function readStoredProjects(): Project[] {
   try {
     const raw = localStorage.getItem("tandem.projects");
@@ -1215,7 +1711,7 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
                 .map((part) => part.text ?? "")
                 .join("\n")
             : "";
-        if (text) messages.push({ id: item.id, role: "user", text });
+        if (text) messages.push({ id: item.id, role: "user", text: visibleUserText(text) });
       }
       if (item.type === "agentMessage" && "text" in item && item.text) {
         messages.push({ id: item.id, role: "assistant", text: item.text });

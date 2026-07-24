@@ -4094,7 +4094,9 @@ var WorkOrderSchema = external_exports.object({
   context: external_exports.array(external_exports.string().min(1)).default([]),
   goalId: external_exports.string().nullable().default(null),
   parentTaskId: external_exports.string().nullable().default(null),
-  profileId: external_exports.string().nullable().default(null)
+  profileId: external_exports.string().nullable().default(null),
+  model: external_exports.string().min(1).nullable().optional(),
+  permissionMode: external_exports.string().min(1).nullable().optional()
 });
 var WorkerReportSchema = external_exports.object({
   status: external_exports.enum(["completed", "blocked", "failed"]),
@@ -4330,7 +4332,7 @@ var ClaudeCliWorkerAdapter = class {
     if (!executable) throw new Error(`Claude CLI not found: ${profile.command}`);
     await mkdir2(logsDir(), { recursive: true });
     const streamLog = join3(logsDir(), `${task.id}.claude.jsonl`);
-    const permissionMode = stringSetting(profile, "permissionMode") ?? "auto";
+    const permissionMode = task.permissionMode ?? stringSetting(profile, "permissionMode") ?? "auto";
     const effort = stringSetting(profile, "effort");
     const args2 = [
       "-p",
@@ -4346,7 +4348,8 @@ var ClaudeCliWorkerAdapter = class {
       "--name",
       `tandem-${task.id.slice(0, 8)}`
     ];
-    if (profile.model) args2.push("--model", profile.model);
+    const model = task.workerModel ?? profile.model;
+    if (model) args2.push("--model", model);
     if (effort) args2.push("--effort", effort);
     const child = spawn2(executable, args2, {
       cwd: task.worktreePath,
@@ -4735,14 +4738,17 @@ var TandemStore = class {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     this.db.prepare(
       `INSERT INTO tasks (
-          id, goal_id, parent_task_id, profile_id, repo_root, worktree_path, branch,
+          id, goal_id, parent_task_id, profile_id, worker_model, permission_mode,
+          repo_root, worktree_path, branch,
           objective, acceptance_json, context_json, status, runtime, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`
     ).run(
       id,
       input2.workOrder.goalId,
       input2.workOrder.parentTaskId,
       input2.profileId,
+      input2.workOrder.model ?? null,
+      input2.workOrder.permissionMode ?? null,
       input2.repoRoot,
       input2.worktreePath,
       input2.branch,
@@ -4882,6 +4888,17 @@ var TandemStore = class {
       CREATE INDEX IF NOT EXISTS task_events_task_id_idx
       ON task_events(task_id, id);
     `);
+    const taskColumns = new Set(
+      this.db.prepare("PRAGMA table_info(tasks)").all().map(
+        (column) => column.name
+      )
+    );
+    if (!taskColumns.has("worker_model")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN worker_model TEXT");
+    }
+    if (!taskColumns.has("permission_mode")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN permission_mode TEXT");
+    }
   }
 };
 function mapGoal(row) {
@@ -4900,6 +4917,8 @@ function mapTask(row) {
     goalId: row.goal_id,
     parentTaskId: row.parent_task_id,
     profileId: row.profile_id,
+    workerModel: row.worker_model,
+    permissionMode: row.permission_mode,
     repoRoot: row.repo_root,
     worktreePath: row.worktree_path,
     branch: row.branch,

@@ -77,6 +77,35 @@ export interface PluginOption {
   displayName: string;
 }
 
+export type PermissionMode = "ask" | "auto" | "full";
+export type ProviderRoute = "auto" | "codex" | "claude";
+
+export interface ComposerAttachment {
+  path: string;
+  name: string;
+  kind: "file" | "folder";
+}
+
+export interface CodexModel {
+  id: string;
+  model: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+  defaultReasoningEffort: string | null;
+  supportedReasoningEfforts: Array<{
+    reasoningEffort: string;
+    description: string;
+  }>;
+}
+
+export interface TurnOptions {
+  model?: string | null;
+  effort?: string | null;
+  permissionMode: PermissionMode;
+  attachments?: ComposerAttachment[];
+}
+
 export interface Bootstrap {
   tandemHome: string;
   projectRoot: string;

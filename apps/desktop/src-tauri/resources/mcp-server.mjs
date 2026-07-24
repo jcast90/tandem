@@ -21151,7 +21151,9 @@ var WorkOrderSchema = external_exports.object({
   context: external_exports.array(external_exports.string().min(1)).default([]),
   goalId: external_exports.string().nullable().default(null),
   parentTaskId: external_exports.string().nullable().default(null),
-  profileId: external_exports.string().nullable().default(null)
+  profileId: external_exports.string().nullable().default(null),
+  model: external_exports.string().min(1).nullable().optional(),
+  permissionMode: external_exports.string().min(1).nullable().optional()
 });
 var WorkerReportSchema = external_exports.object({
   status: external_exports.enum(["completed", "blocked", "failed"]),
@@ -21463,14 +21465,17 @@ var TandemStore = class {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     this.db.prepare(
       `INSERT INTO tasks (
-          id, goal_id, parent_task_id, profile_id, repo_root, worktree_path, branch,
+          id, goal_id, parent_task_id, profile_id, worker_model, permission_mode,
+          repo_root, worktree_path, branch,
           objective, acceptance_json, context_json, status, runtime, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`
     ).run(
       id,
       input.workOrder.goalId,
       input.workOrder.parentTaskId,
       input.profileId,
+      input.workOrder.model ?? null,
+      input.workOrder.permissionMode ?? null,
       input.repoRoot,
       input.worktreePath,
       input.branch,
@@ -21610,6 +21615,17 @@ var TandemStore = class {
       CREATE INDEX IF NOT EXISTS task_events_task_id_idx
       ON task_events(task_id, id);
     `);
+    const taskColumns = new Set(
+      this.db.prepare("PRAGMA table_info(tasks)").all().map(
+        (column) => column.name
+      )
+    );
+    if (!taskColumns.has("worker_model")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN worker_model TEXT");
+    }
+    if (!taskColumns.has("permission_mode")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN permission_mode TEXT");
+    }
   }
 };
 function mapGoal(row) {
@@ -21628,6 +21644,8 @@ function mapTask(row) {
     goalId: row.goal_id,
     parentTaskId: row.parent_task_id,
     profileId: row.profile_id,
+    workerModel: row.worker_model,
+    permissionMode: row.permission_mode,
     repoRoot: row.repo_root,
     worktreePath: row.worktree_path,
     branch: row.branch,
@@ -21835,14 +21853,16 @@ function workOrderFromInput(input) {
     context: input.context ?? [],
     goalId: input.goalId ?? null,
     parentTaskId: input.parentTaskId ?? null,
-    profileId: input.profileId ?? null
+    profileId: input.profileId ?? null,
+    model: input.model ?? null,
+    permissionMode: input.permissionMode ?? null
   });
 }
 
 // ../../src/mcp-server.ts
 var projectRoot = process.env.TANDEM_PROJECT_ROOT ?? process.cwd();
 var service = new TandemService();
-var instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Delegate bounded implementation work through tandem_delegate instead of doing all execution yourself. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. Do not instruct workers to create commits; Tandem commits completed work after the worker reports. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch\u2014tell the user to run tandem apply <taskId> after review.`;
+var instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Delegate bounded implementation work through tandem_delegate instead of doing all execution yourself. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. If a desktop routing directive specifies a Claude model or permission_mode, pass those exact values to tandem_delegate. Do not instruct workers to create commits; Tandem commits completed work after the worker reports. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch\u2014tell the user to run tandem apply <taskId> after review.`;
 var server = new McpServer(
   {
     name: "tandem",
@@ -21887,10 +21907,21 @@ server.registerTool(
       context: external_exports.array(external_exports.string().min(1)).optional(),
       goal_id: external_exports.string().min(1).optional(),
       parent_task_id: external_exports.string().min(1).optional(),
-      profile_id: external_exports.string().min(1).optional()
+      profile_id: external_exports.string().min(1).optional(),
+      model: external_exports.string().min(1).optional(),
+      permission_mode: external_exports.enum(["default", "acceptEdits", "bypassPermissions", "plan", "delegate", "auto"]).optional()
     }
   },
-  async ({ objective, acceptance_criteria, context, goal_id, parent_task_id, profile_id }) => {
+  async ({
+    objective,
+    acceptance_criteria,
+    context,
+    goal_id,
+    parent_task_id,
+    profile_id,
+    model,
+    permission_mode
+  }) => {
     const task = await service.delegate(
       workOrderFromInput({
         objective,
@@ -21898,7 +21929,9 @@ server.registerTool(
         ...context ? { context } : {},
         ...goal_id ? { goalId: goal_id } : {},
         ...parent_task_id ? { parentTaskId: parent_task_id } : {},
-        ...profile_id ? { profileId: profile_id } : {}
+        ...profile_id ? { profileId: profile_id } : {},
+        ...model ? { model } : {},
+        ...permission_mode ? { permissionMode: permission_mode } : {}
       }),
       projectRoot
     );

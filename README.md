@@ -35,6 +35,9 @@ orchestration core:
 - Claude remains the bounded execution worker through the authenticated Claude
   CLI.
 - Projects contain chats in the sidebar.
+- New chats can start in any saved project or a newly selected directory.
+  Project rows also expose a one-click new-chat action, and chats can be archived
+  or permanently deleted from their inline menu.
 - Codex delegation calls bind the resulting Claude task to the active chat.
 - Claude progress, blocked questions, final reports, verification, and isolated
   commit metadata appear inline while the outer turn continues.
@@ -45,8 +48,14 @@ orchestration core:
   worker card can send guidance to Claude's live streaming session.
 - Changed files and worker steps are expandable and clickable.
 - The composer discovers enabled Codex skills and attaches selected skills as
-  native turn input. Installed plugins remain available through their owning
-  CLI session.
+  native turn input. Files and folders can be attached as local context, while
+  installed plugins remain available through their owning CLI session.
+- The composer can leave routing on Auto, keep a request with Codex, or require
+  delegation to Claude. Codex models and reasoning effort are discovered from
+  the authenticated local app-server; Claude model aliases and permission
+  overrides flow into each delegated work order.
+- Ask, auto-approve, and full-access permission modes map to the corresponding
+  Codex approval/sandbox policy and Claude CLI permission mode.
 - Worker activity stays behind an on-demand panel rather than turning the app
   into an IDE or monitoring dashboard.
 - Connections settings show each CLI's resolved path, version, and subscription
@@ -261,11 +270,9 @@ Adapters expose capability probes and execution/session operations. New
 adapters can therefore add API transports, other providers, or local models
 without changing goals, tasks, events, worktrees, or runtime selection.
 
-Planned follow-ups include native turn steering, clickable execution steps and
-file-change summaries, lightweight file and terminal viewers, skills/plugin
-selection, resumable blocked-worker questions, revision rounds in the same
-worker session, token/cost budgets, task-type routing, evaluation suites, and
-safe worktree cleanup.
+Planned follow-ups include richer approval prompts, resumable blocked-worker
+questions, revision rounds in the same worker session, token/cost budgets,
+evaluation suites, and safe worktree cleanup.
 
 ## Development
 

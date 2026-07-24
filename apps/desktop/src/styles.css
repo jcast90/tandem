@@ -156,11 +156,16 @@ textarea:focus-visible {
   height: 28px;
 }
 
+.new-chat-wrap {
+  position: relative;
+  margin: 8px 10px 16px;
+}
+
 .new-chat {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 11px;
-  margin: 8px 10px 16px;
   padding: 10px 11px;
   cursor: pointer;
   border-radius: 10px;
@@ -172,6 +177,57 @@ textarea:focus-visible {
 
 .new-chat:hover {
   background: var(--surface-hover);
+}
+
+.new-chat-menu {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 5px);
+  left: 0;
+  display: grid;
+  width: 250px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-raised);
+  box-shadow: 0 16px 42px oklch(0 0 0 / 38%);
+}
+
+.new-chat-menu > span {
+  padding: 6px 8px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 620;
+  text-transform: uppercase;
+}
+
+.new-chat-menu button {
+  display: grid;
+  min-height: 36px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+
+.new-chat-menu button:hover {
+  background: var(--surface-hover);
+}
+
+.new-chat-menu button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-chat-menu button i {
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
 }
 
 .sidebar-scroll {
@@ -205,8 +261,22 @@ textarea:focus-visible {
   margin-bottom: 2px;
 }
 
+.project-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  border-radius: 9px;
+}
+
+.project-row:hover,
+.project-row.selected {
+  background: var(--surface-raised);
+}
+
 .project-button {
   display: grid;
+  width: 100%;
   grid-template-columns: 20px minmax(0, 1fr) 20px;
   align-items: center;
   gap: 8px;
@@ -221,8 +291,35 @@ textarea:focus-visible {
 
 .project-button:hover,
 .project-button.selected {
-  background: var(--surface-raised);
+  background: transparent;
   color: var(--ink);
+}
+
+.project-new-chat {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  opacity: 0;
+}
+
+.project-row:hover .project-new-chat,
+.project-new-chat:focus-visible {
+  opacity: 1;
+}
+
+.project-new-chat:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.project-new-chat svg {
+  width: 14px;
+  height: 14px;
 }
 
 .project-button span {
@@ -245,7 +342,16 @@ textarea:focus-visible {
   padding: 2px 0 6px 27px;
 }
 
+.chat-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: center;
+  border-radius: 8px;
+}
+
 .chat {
+  width: 100%;
   overflow: hidden;
   padding: 8px 10px;
   cursor: pointer;
@@ -263,6 +369,60 @@ textarea:focus-visible {
 .chat.selected {
   background: var(--surface-raised);
   color: var(--ink);
+}
+
+.chat-actions {
+  width: 25px;
+  height: 25px;
+  cursor: pointer;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: -1px;
+  opacity: 0;
+}
+
+.chat-row:hover .chat-actions,
+.chat-actions:focus-visible,
+.chat-actions[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.chat-actions:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.chat-actions-menu {
+  position: absolute;
+  z-index: 9;
+  top: 30px;
+  right: 0;
+  display: grid;
+  width: 122px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  box-shadow: 0 12px 30px oklch(0 0 0 / 36%);
+}
+
+.chat-actions-menu button {
+  min-height: 31px;
+  cursor: pointer;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+
+.chat-actions-menu button:hover {
+  background: var(--surface-hover);
+}
+
+.chat-actions-menu button.danger {
+  color: oklch(0.78 0.14 25);
 }
 
 .empty-chats {
@@ -1008,6 +1168,48 @@ textarea:focus-visible {
   background: var(--surface);
 }
 
+.attachment-row {
+  display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 0 9px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  max-width: 210px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.attachment-chip > svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.attachment-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip button {
+  cursor: pointer;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 14px;
+}
+
 .composer:focus-within {
   border-color: oklch(0.5 0.04 330);
 }
@@ -1023,6 +1225,7 @@ textarea:focus-visible {
   color: var(--ink);
   font-size: 15px;
   line-height: 1.45;
+  grid-column: 1 / -1;
 }
 
 .composer textarea::placeholder {
@@ -1037,6 +1240,7 @@ textarea:focus-visible {
   align-self: end;
   color: var(--faint);
   font-size: 11px;
+  grid-column: 1;
 }
 
 .composer-meta span {
@@ -1045,9 +1249,12 @@ textarea:focus-visible {
   gap: 5px;
 }
 
-.skill-picker {
+.composer-control {
   display: inline-flex;
+  position: relative;
+  width: 27px;
   min-height: 25px;
+  justify-content: center;
   align-items: center;
   gap: 5px;
   cursor: pointer;
@@ -1058,18 +1265,21 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
-.skill-picker:hover,
-.skill-picker.active {
+.composer-control:hover,
+.composer-control.active {
   background: var(--surface-raised);
   color: var(--ink);
 }
 
-.skill-picker svg {
+.composer-control svg {
   width: 13px;
   height: 13px;
 }
 
-.skill-picker b {
+.composer-control b {
+  position: absolute;
+  top: -4px;
+  right: -5px;
   display: grid;
   min-width: 16px;
   height: 16px;
@@ -1078,6 +1288,210 @@ textarea:focus-visible {
   background: var(--primary-soft);
   color: var(--ink);
   font-size: 9px;
+}
+
+.permission-control,
+.route-control {
+  display: inline-flex;
+  min-height: 27px;
+  align-items: center;
+  cursor: pointer;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.permission-control {
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.permission-control.full {
+  color: oklch(0.78 0.14 45);
+}
+
+.permission-control:hover,
+.permission-control.active,
+.route-control:hover,
+.route-control.active {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.route-control {
+  gap: 5px;
+  margin-left: auto;
+  padding: 0 7px;
+}
+
+.route-control span {
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 610;
+}
+
+.route-control small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.route-control svg {
+  width: 12px;
+  height: 12px;
+}
+
+.composer-popover {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 8px);
+  display: grid;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--sidebar);
+  box-shadow: 0 18px 50px oklch(0 0 0 / 38%);
+  animation: popover-in 140ms ease-out;
+}
+
+.composer-popover > strong {
+  padding: 7px 9px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.composer-popover > button,
+.route-options > button,
+.model-list > button {
+  display: flex;
+  width: 100%;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.composer-popover > button:hover,
+.composer-popover > button.selected,
+.route-options > button:hover,
+.route-options > button.selected,
+.model-list > button:hover,
+.model-list > button.selected {
+  background: var(--surface-raised);
+}
+
+.composer-popover button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-popover button b {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 610;
+}
+
+.composer-popover button small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.composer-popover button i {
+  color: var(--success);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.add-menu {
+  left: 0;
+  width: 300px;
+}
+
+.add-menu > button {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  justify-content: initial;
+}
+
+.add-menu svg,
+.menu-glyph {
+  width: 16px;
+  color: var(--muted);
+}
+
+.permission-menu {
+  left: 32px;
+  width: 320px;
+}
+
+.route-menu {
+  right: 0;
+  width: min(440px, 100%);
+  max-height: min(600px, 68vh);
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.route-options {
+  display: grid;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.route-models {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 2px 2px;
+}
+
+.route-models > span {
+  display: block;
+  padding: 5px 7px;
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 620;
+  text-transform: uppercase;
+}
+
+.model-list {
+  display: grid;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.model-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 7px 8px;
+}
+
+.model-pills button {
+  min-height: 27px;
+  cursor: pointer;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.model-pills button:hover,
+.model-pills button.selected {
+  border-color: var(--faint);
+  background: var(--surface-raised);
+  color: var(--ink);
 }
 
 .capability-popover {

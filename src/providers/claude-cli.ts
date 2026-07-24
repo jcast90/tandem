@@ -58,7 +58,8 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
 
     await mkdir(logsDir(), { recursive: true });
     const streamLog = join(logsDir(), `${task.id}.claude.jsonl`);
-    const permissionMode = stringSetting(profile, "permissionMode") ?? "auto";
+    const permissionMode =
+      task.permissionMode ?? stringSetting(profile, "permissionMode") ?? "auto";
     const effort = stringSetting(profile, "effort");
     const args = [
       "-p",
@@ -74,7 +75,8 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
       "--name",
       `tandem-${task.id.slice(0, 8)}`,
     ];
-    if (profile.model) args.push("--model", profile.model);
+    const model = task.workerModel ?? profile.model;
+    if (model) args.push("--model", model);
     if (effort) args.push("--effort", effort);
 
     const child = spawn(executable, args, {

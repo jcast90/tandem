@@ -174,6 +174,8 @@ export function workOrderFromInput(input: {
   goalId?: string | null;
   parentTaskId?: string | null;
   profileId?: string | null;
+  model?: string | null;
+  permissionMode?: string | null;
 }): WorkOrder {
   return WorkOrderSchema.parse({
     objective: input.objective,
@@ -182,5 +184,7 @@ export function workOrderFromInput(input: {
     goalId: input.goalId ?? null,
     parentTaskId: input.parentTaskId ?? null,
     profileId: input.profileId ?? null,
+    model: input.model ?? null,
+    permissionMode: input.permissionMode ?? null,
   });
 }

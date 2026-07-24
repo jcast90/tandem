@@ -53,6 +53,8 @@ export const WorkOrderSchema = z.object({
   goalId: z.string().nullable().default(null),
   parentTaskId: z.string().nullable().default(null),
   profileId: z.string().nullable().default(null),
+  model: z.string().min(1).nullable().optional(),
+  permissionMode: z.string().min(1).nullable().optional(),
 });
 export type WorkOrder = z.infer<typeof WorkOrderSchema>;
 
@@ -80,6 +82,8 @@ export interface TaskRecord {
   goalId: string | null;
   parentTaskId: string | null;
   profileId: string;
+  workerModel: string | null;
+  permissionMode: string | null;
   repoRoot: string;
   worktreePath: string;
   branch: string;

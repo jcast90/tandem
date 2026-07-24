@@ -7,7 +7,7 @@ import { TandemService, workOrderFromInput } from "./service.js";
 const projectRoot = process.env.TANDEM_PROJECT_ROOT ?? process.cwd();
 const service = new TandemService();
 
-const instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Delegate bounded implementation work through tandem_delegate instead of doing all execution yourself. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. Do not instruct workers to create commits; Tandem commits completed work after the worker reports. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch—tell the user to run tandem apply <taskId> after review.`;
+const instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Delegate bounded implementation work through tandem_delegate instead of doing all execution yourself. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. If a desktop routing directive specifies a Claude model or permission_mode, pass those exact values to tandem_delegate. Do not instruct workers to create commits; Tandem commits completed work after the worker reports. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch—tell the user to run tandem apply <taskId> after review.`;
 
 const server = new McpServer(
   {
@@ -59,9 +59,22 @@ server.registerTool(
       goal_id: z.string().min(1).optional(),
       parent_task_id: z.string().min(1).optional(),
       profile_id: z.string().min(1).optional(),
+      model: z.string().min(1).optional(),
+      permission_mode: z
+        .enum(["default", "acceptEdits", "bypassPermissions", "plan", "delegate", "auto"])
+        .optional(),
     },
   },
-  async ({ objective, acceptance_criteria, context, goal_id, parent_task_id, profile_id }) => {
+  async ({
+    objective,
+    acceptance_criteria,
+    context,
+    goal_id,
+    parent_task_id,
+    profile_id,
+    model,
+    permission_mode,
+  }) => {
     const task = await service.delegate(
       workOrderFromInput({
         objective,
@@ -70,6 +83,8 @@ server.registerTool(
         ...(goal_id ? { goalId: goal_id } : {}),
         ...(parent_task_id ? { parentTaskId: parent_task_id } : {}),
         ...(profile_id ? { profileId: profile_id } : {}),
+        ...(model ? { model } : {}),
+        ...(permission_mode ? { permissionMode: permission_mode } : {}),
       }),
       projectRoot
     );

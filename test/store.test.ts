@@ -29,6 +29,8 @@ describe("TandemStore", () => {
         goalId: child.id,
         parentTaskId: null,
         profileId: null,
+        model: "opus",
+        permissionMode: "acceptEdits",
       },
       profileId: "worker-primary",
       repoRoot: "/tmp/repo",
@@ -54,6 +56,8 @@ describe("TandemStore", () => {
 
     expect(updated.status).toBe("completed");
     expect(updated.goalId).toBe(child.id);
+    expect(updated.workerModel).toBe("opus");
+    expect(updated.permissionMode).toBe("acceptEdits");
     expect(updated.report?.tests).toEqual(["pnpm test"]);
     expect(store.listEvents(task.id).map((event) => event.type)).toEqual([
       "task.queued",

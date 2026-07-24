@@ -32,6 +32,8 @@ interface TaskRow {
   goal_id: string | null;
   parent_task_id: string | null;
   profile_id: string;
+  worker_model: string | null;
+  permission_mode: string | null;
   repo_root: string;
   worktree_path: string;
   branch: string;
@@ -123,15 +125,18 @@ export class TandemStore {
     this.db
       .prepare(
         `INSERT INTO tasks (
-          id, goal_id, parent_task_id, profile_id, repo_root, worktree_path, branch,
+          id, goal_id, parent_task_id, profile_id, worker_model, permission_mode,
+          repo_root, worktree_path, branch,
           objective, acceptance_json, context_json, status, runtime, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`
       )
       .run(
         id,
         input.workOrder.goalId,
         input.workOrder.parentTaskId,
         input.profileId,
+        input.workOrder.model ?? null,
+        input.workOrder.permissionMode ?? null,
         input.repoRoot,
         input.worktreePath,
         input.branch,
@@ -307,6 +312,18 @@ export class TandemStore {
       CREATE INDEX IF NOT EXISTS task_events_task_id_idx
       ON task_events(task_id, id);
     `);
+
+    const taskColumns = new Set(
+      (this.db.prepare("PRAGMA table_info(tasks)").all() as unknown as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    );
+    if (!taskColumns.has("worker_model")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN worker_model TEXT");
+    }
+    if (!taskColumns.has("permission_mode")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN permission_mode TEXT");
+    }
   }
 }
 
@@ -327,6 +344,8 @@ function mapTask(row: TaskRow): TaskRecord {
     goalId: row.goal_id,
     parentTaskId: row.parent_task_id,
     profileId: row.profile_id,
+    workerModel: row.worker_model,
+    permissionMode: row.permission_mode,
     repoRoot: row.repo_root,
     worktreePath: row.worktree_path,
     branch: row.branch,
