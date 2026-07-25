@@ -4373,8 +4373,9 @@ var ClaudeCliWorkerAdapter = class {
         resultEvent = event;
         child.stdin.end();
       }
-      const activity = extractActivity(event);
-      if (activity) hooks.onActivity("worker.activity", activity);
+      for (const activity of extractActivities(event)) {
+        hooks.onActivity("worker.activity", activity);
+      }
     });
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
@@ -4462,27 +4463,48 @@ function parseReport(event) {
   }
   throw new Error("Claude result did not contain a valid structured worker report.");
 }
-function extractActivity(event) {
-  if (event.type !== "assistant" || !isObject(event.message)) return null;
+function extractActivities(event) {
+  if (event.type !== "assistant" || !isObject(event.message)) return [];
   const content = event.message.content;
-  if (!Array.isArray(content)) return null;
-  const tool = content.find(
-    (item) => isObject(item) && item.type === "tool_use" && typeof item.name === "string"
-  );
-  if (!isObject(tool) || typeof tool.name !== "string") return null;
-  return {
-    tool: tool.name,
-    detail: describeToolUse(tool.name, tool.input)
-  };
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((item) => {
+    if (!isObject(item) || item.type !== "tool_use" || typeof item.name !== "string") return [];
+    const metadata = describeToolUse(item.name, item.input);
+    return [
+      {
+        tool: item.name,
+        toolUseId: typeof item.id === "string" ? item.id : void 0,
+        ...metadata
+      }
+    ];
+  });
 }
 function describeToolUse(name, input2) {
-  if (!isObject(input2)) return `Using ${name}`;
+  const kind = claudeActivityKind(name);
+  if (!isObject(input2)) return { kind, detail: `Using ${name}` };
   const path = typeof input2.file_path === "string" ? input2.file_path : typeof input2.path === "string" ? input2.path : null;
-  if (path) return `${name}: ${truncate(path, 90)}`;
-  if (typeof input2.description === "string") return truncate(input2.description, 100);
-  if (typeof input2.command === "string") return `${name}: ${truncate(input2.command, 90)}`;
-  if (typeof input2.pattern === "string") return `${name}: ${truncate(input2.pattern, 90)}`;
-  return `Using ${name}`;
+  const description = typeof input2.description === "string" ? input2.description : typeof input2.prompt === "string" ? input2.prompt : null;
+  const detail = path ? `${name}: ${truncate(path, 90)}` : description ? truncate(description, 100) : typeof input2.command === "string" ? `${name}: ${truncate(input2.command, 90)}` : typeof input2.pattern === "string" ? `${name}: ${truncate(input2.pattern, 90)}` : `Using ${name}`;
+  return {
+    kind,
+    detail,
+    path,
+    subagent: kind === "subagent",
+    agentType: typeof input2.subagent_type === "string" ? input2.subagent_type : typeof input2.agent === "string" ? input2.agent : void 0,
+    objective: description ? truncate(description, 180) : void 0
+  };
+}
+function claudeActivityKind(name) {
+  const normalized = name.toLowerCase();
+  if (normalized === "task" || normalized === "agent") return "subagent";
+  if (["read", "notebookread"].includes(normalized)) return "read";
+  if (["write", "edit", "notebookedit"].includes(normalized)) return "file";
+  if (["grep", "glob", "ls", "search"].includes(normalized)) return "search";
+  if (normalized === "bash") return "command";
+  if (normalized === "skill") return "skill";
+  if (normalized.startsWith("web")) return "web";
+  if (normalized.startsWith("task")) return "task";
+  return "tool";
 }
 function safeJsonObject(line) {
   try {

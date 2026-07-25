@@ -1,5 +1,6 @@
 import TauriWebSocket from "@tauri-apps/plugin-websocket";
 
+import { activityFromItem } from "./activity";
 import type {
   Activity,
   CodexItem,
@@ -46,6 +47,7 @@ export class CodexConnection {
       timeout: number;
     }
   >();
+  private readonly activityById = new Map<string, Activity>();
 
   constructor(
     private readonly endpoint: string,
@@ -88,6 +90,7 @@ export class CodexConnection {
       pending.reject(new Error("Codex connection closed."));
     }
     this.pending.clear();
+    this.activityById.clear();
   }
 
   async listThreads(): Promise<CodexThread[]> {
@@ -309,17 +312,62 @@ export class CodexConnection {
       if (!item) return;
       const complete = message.method === "item/completed";
       this.events.onItem(item, complete);
-      const activity = activityFromItem(item, complete);
-      if (activity) this.events.onActivity(activity);
+      const observedAt = Number(
+        complete ? (params.completedAtMs ?? Date.now()) : (params.startedAtMs ?? Date.now())
+      );
+      const activity = activityFromItem(item, complete, String(params.turnId ?? ""), observedAt);
+      if (activity) {
+        this.activityById.set(activity.id, activity);
+        this.events.onActivity(activity);
+      }
       return;
     }
     if (message.method === "item/mcpToolCall/progress") {
       const itemId = String(params.itemId ?? "");
+      const existing = this.activityById.get(itemId);
+      const activity: Activity = existing
+        ? {
+            ...existing,
+            detail: String(params.message ?? existing.detail),
+            status: "running",
+          }
+        : {
+            id: itemId,
+            turnId: String(params.turnId ?? "") || undefined,
+            provider: "codex",
+            kind: "tool",
+            label: "Tool reported progress",
+            detail: String(params.message ?? "Tool progress"),
+            status: "running",
+            startedAt: Date.now(),
+          };
+      this.activityById.set(itemId, activity);
+      this.events.onActivity(activity);
+      return;
+    }
+    if (message.method === "turn/plan/updated") {
+      const turnId = String(params.turnId ?? "");
+      const plan = Array.isArray(params.plan)
+        ? params.plan.filter(isJsonObject).map((step) => {
+            const status = String(step.status ?? "pending");
+            return `${status === "completed" ? "✓" : status === "inProgress" ? "→" : "○"} ${String(
+              step.step ?? ""
+            )}`;
+          })
+        : [];
       this.events.onActivity({
-        id: itemId,
-        label: "Claude is working",
-        detail: String(params.message ?? "Worker progress"),
-        status: "running",
+        id: `plan-${turnId}`,
+        turnId: turnId || undefined,
+        provider: "codex",
+        kind: "plan",
+        label: "Updated the plan",
+        detail:
+          String(params.explanation ?? "") ||
+          `${plan.filter((step) => step.startsWith("✓")).length} of ${plan.length} steps complete`,
+        status:
+          plan.length > 0 && plan.every((step) => step.startsWith("✓")) ? "completed" : "running",
+        startedAt: Date.now(),
+        details: plan,
       });
       return;
     }
@@ -461,34 +509,4 @@ function attachmentRoots(attachments: ComposerAttachment[]): string[] {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function activityFromItem(item: CodexItem, complete: boolean): Activity | null {
-  if (item.type === "mcpToolCall") {
-    const tool = "tool" in item ? String(item.tool) : "Tandem tool";
-    const failed = "error" in item && Boolean(item.error);
-    return {
-      id: item.id,
-      label: humanizeTool(tool),
-      detail: tool.startsWith("tandem_") ? "Claude worker orchestration" : "Tool activity",
-      status: failed ? "failed" : complete ? "completed" : "running",
-    };
-  }
-  if (item.type === "commandExecution") {
-    return {
-      id: item.id,
-      label: complete ? "Checked the workspace" : "Checking the workspace",
-      detail: "Codex local command",
-      status: complete ? "completed" : "running",
-    };
-  }
-  return null;
-}
-
-function humanizeTool(tool: string): string {
-  return tool
-    .replace(/^tandem_/, "")
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }

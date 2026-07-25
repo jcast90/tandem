@@ -17,6 +17,14 @@ import {
 } from "./components/Icons";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { SettingsView } from "./components/SettingsView";
+import { WorkTrace } from "./components/WorkTrace";
+import {
+  activitiesFromThread,
+  durationLabel,
+  groupActivities,
+  timeLabel,
+  upsertActivity,
+} from "./lib/activity";
 import { CodexConnection } from "./lib/codex";
 import type {
   Activity,
@@ -159,8 +167,10 @@ export function App() {
           activeTurnRef.current = turnId;
           setActiveTurnId(turnId);
           setGenerating(true);
+          setMessages((current) => startWorkMessage(current, turnId, Date.now()));
         },
-        onTurnComplete: (turnId) => {
+        onTurnComplete: (turnId, status) => {
+          setMessages((current) => completeWorkMessage(current, turnId, status, Date.now()));
           if (activeTurnRef.current === turnId) {
             activeTurnRef.current = "";
             allowTurnEventsRef.current = false;
@@ -308,10 +318,23 @@ export function App() {
     () => activeTasks.filter((task) => task.repoRoot === activeProject),
     [activeProject, activeTasks]
   );
-  const visibleActivities = useMemo(
-    () => mergeTaskActivities(activities, bootstrap.tasks),
-    [activities, bootstrap.tasks]
+  const projectTasks = useMemo(
+    () => bootstrap.tasks.filter((task) => task.repoRoot === activeProject),
+    [activeProject, bootstrap.tasks]
   );
+  const visibleActivities = useMemo(() => groupActivities(activities), [activities]);
+  const codexSubagentCount = useMemo(
+    () => new Set(visibleActivities.flatMap((activity) => activity.subagentIds)).size,
+    [visibleActivities]
+  );
+  const activitiesByTurn = useMemo(() => {
+    const grouped = new Map<string, Activity[]>();
+    for (const activity of activities) {
+      if (!activity.turnId) continue;
+      grouped.set(activity.turnId, [...(grouped.get(activity.turnId) ?? []), activity]);
+    }
+    return grouped;
+  }, [activities]);
   const taskById = useMemo(
     () => new Map(bootstrap.tasks.map((task) => [task.id, task])),
     [bootstrap.tasks]
@@ -565,6 +588,9 @@ export function App() {
           selectedSkills,
           attachments
         );
+        setActivities((current) =>
+          addSkillActivities(current, selectedSkills, activeTurnId, "Attached to your guidance")
+        );
         setSelectedSkillPaths([]);
         setSkillsOpen(false);
         setAttachments([]);
@@ -575,6 +601,7 @@ export function App() {
       submissionEpoch = ++submissionEpochRef.current;
       allowTurnEventsRef.current = true;
       setGenerating(true);
+      setMessages((current) => startWorkMessage(current, `pending-${submissionEpoch}`, Date.now()));
       let thread = activeThread;
       if (!thread) {
         thread = await connection.startThread(activeProject, turnOptions);
@@ -597,10 +624,15 @@ export function App() {
       setComposerMenu(null);
       activeTurnRef.current = turnId;
       setActiveTurnId(turnId);
+      setMessages((current) => startWorkMessage(current, turnId, Date.now()));
+      setActivities((current) =>
+        addSkillActivities(current, selectedSkills, turnId, "Attached to this turn")
+      );
     } catch (error) {
       if (submissionEpoch !== null && submissionEpoch !== submissionEpochRef.current) return;
       allowTurnEventsRef.current = false;
       setGenerating(false);
+      setMessages((current) => completeLatestWorkMessage(current, "failed", Date.now()));
       setNotice(error instanceof Error ? error.message : String(error));
     }
   };
@@ -615,6 +647,7 @@ export function App() {
     activeTurnRef.current = "";
     setActiveTurnId("");
     setGenerating(false);
+    setMessages((current) => completeLatestWorkMessage(current, "interrupted", Date.now()));
     setNotice("Stopping active work…");
     try {
       const actions: Promise<unknown>[] = projectActiveTasks.map((task) =>
@@ -871,8 +904,10 @@ export function App() {
                   aria-expanded={activityOpen}
                 >
                   <ActivityIcon />
-                  <span>Workers</span>
-                  {activeTasks.length > 0 && <b>{activeTasks.length}</b>}
+                  <span>Work</span>
+                  {(projectActiveTasks.length > 0 || generating) && (
+                    <b>{projectActiveTasks.length + (generating ? 1 : 0)}</b>
+                  )}
                 </button>
               </>
             )}
@@ -903,7 +938,14 @@ export function App() {
               ) : (
                 <div className="message-column">
                   {messages.map((message) =>
-                    message.role === "worker" && message.taskId ? (
+                    message.role === "work" && message.turnId ? (
+                      <WorkTrace
+                        key={message.id}
+                        message={message}
+                        activities={activitiesByTurn.get(message.turnId) ?? []}
+                        onOpenFile={(path) => void inspectFile(path)}
+                      />
+                    ) : message.role === "worker" && message.taskId ? (
                       <WorkerCard
                         key={message.id}
                         task={taskById.get(message.taskId)}
@@ -933,13 +975,6 @@ export function App() {
                         </div>
                       </article>
                     )
-                  )}
-                  {generating && !messages.some((message) => message.streaming) && (
-                    <div className="thinking-row">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
                   )}
                 </div>
               )}
@@ -1292,8 +1327,8 @@ export function App() {
           <aside className="activity-panel" aria-label="Worker activity">
             <div className="activity-header">
               <div>
-                <strong>Worker activity</strong>
-                <span>Details stay here until you need them.</span>
+                <strong>Work and agents</strong>
+                <span>What Codex and Claude actually reported.</span>
               </div>
               <button
                 className="icon-button"
@@ -1305,23 +1340,96 @@ export function App() {
               </button>
             </div>
             <div className="activity-content">
-              {visibleActivities.length === 0 ? (
-                <div className="activity-empty">
-                  <ActivityIcon />
-                  <strong>Quiet for now</strong>
-                  <p>When Codex delegates work to Claude, progress will appear here.</p>
+              <div className="provider-lanes">
+                <div>
+                  <span className="provider-mark codex">O</span>
+                  <p>
+                    <strong>Codex</strong>
+                    <span>
+                      {generating ? "Working in the outer conversation" : "Outer conversation"}
+                    </span>
+                  </p>
+                  <em>{visibleActivities.length} steps</em>
+                  <small>
+                    {codexSubagentCount > 0
+                      ? `${codexSubagentCount} ${codexSubagentCount === 1 ? "subagent" : "subagents"}`
+                      : "No subagents"}
+                  </small>
                 </div>
-              ) : (
-                visibleActivities.map((activity) => (
-                  <div className="activity-row" key={activity.id}>
-                    <span className={`activity-status ${activity.status}`} />
-                    <div>
-                      <strong>{activity.label}</strong>
-                      <span>{activity.detail}</span>
-                    </div>
+                <div>
+                  <span className="provider-mark claude">C</span>
+                  <p>
+                    <strong>Claude</strong>
+                    <span>
+                      {projectActiveTasks.length > 0
+                        ? `${projectActiveTasks.length} active worker ${
+                            projectActiveTasks.length === 1 ? "task" : "tasks"
+                          }`
+                        : "No active worker"}
+                    </span>
+                  </p>
+                  <em>{projectTasks.length} tasks</em>
+                  <small>{claudeSubagentSummary(projectTasks)}</small>
+                </div>
+              </div>
+
+              <section className="activity-section">
+                <div className="activity-section-heading">
+                  <strong>Conversation steps</strong>
+                  <span>{visibleActivities.length}</span>
+                </div>
+                {visibleActivities.length === 0 ? (
+                  <div className="activity-empty compact">
+                    <strong>
+                      {generating ? "Preparing the first step" : "No activity in this chat"}
+                    </strong>
+                    <p>
+                      {generating
+                        ? "Reported commands, files, skills, and agents will appear here."
+                        : "Start a turn to see its work trace."}
+                    </p>
                   </div>
-                ))
-              )}
+                ) : (
+                  visibleActivities.map((activity) => (
+                    <details className="activity-row" key={activity.id}>
+                      <summary>
+                        <span className={`activity-status ${activity.status}`} />
+                        <span>
+                          <strong>{activity.label}</strong>
+                          <small>{activity.detail}</small>
+                        </span>
+                        <em>
+                          {activity.provider === "claude" ? "Claude" : "Codex"}
+                          {activity.startedAt ? ` · ${timeLabel(activity.startedAt)}` : ""}
+                        </em>
+                        <ChevronIcon className="chevron" />
+                      </summary>
+                      <div>
+                        {activity.details.length === 0 ? (
+                          <p>No additional detail was reported.</p>
+                        ) : (
+                          activity.details.map((detail) => <p key={detail}>{detail}</p>)
+                        )}
+                      </div>
+                    </details>
+                  ))
+                )}
+              </section>
+
+              <section className="activity-section">
+                <div className="activity-section-heading">
+                  <strong>Claude tasks</strong>
+                  <span>{projectTasks.length}</span>
+                </div>
+                {projectTasks.length === 0 ? (
+                  <div className="activity-empty compact">
+                    <strong>No Claude worker was assigned</strong>
+                    <p>This conversation was handled directly by Codex.</p>
+                  </div>
+                ) : (
+                  projectTasks.map((task) => <PanelTask key={task.id} task={task} />)
+                )}
+              </section>
             </div>
             <div className="activity-footer">
               <div>
@@ -1401,6 +1509,74 @@ function EmptyConversation({ project }: { project: string }) {
   );
 }
 
+function PanelTask({ task }: { task: Task }) {
+  const startedAt = new Date(task.createdAt).getTime();
+  const updatedAt = new Date(task.updatedAt).getTime();
+  const active = ["queued", "preparing", "running"].includes(task.status);
+  const duration = Math.max(0, (active ? Date.now() : updatedAt) - startedAt);
+  const events = task.events.filter((event) =>
+    [
+      "task.queued",
+      "worker.launched",
+      "worker.started",
+      "worker.activity",
+      "worker.steered",
+      "worker.completed",
+      "worker.failed",
+      "worker.blocked",
+    ].includes(event.eventType)
+  );
+  const subagents = new Set(
+    events
+      .filter((event) => event.payload.subagent === true)
+      .map((event) => String(event.payload.toolUseId ?? event.id))
+  ).size;
+  const statusClass =
+    task.status === "failed" || task.status === "blocked"
+      ? "failed"
+      : task.status === "completed" || task.status === "canceled"
+        ? "completed"
+        : "running";
+
+  return (
+    <details className="panel-task">
+      <summary>
+        <i className={`activity-status ${statusClass}`} aria-hidden="true" />
+        <span>
+          <strong>{task.objective}</strong>
+          <small>
+            {titleCase(task.status)} · {durationLabel(duration)}
+          </small>
+        </span>
+        <ChevronIcon className="chevron" />
+      </summary>
+      <div className="panel-task-detail">
+        <div className="panel-task-meta">
+          <span>{task.workerModel || task.profileId}</span>
+          <span>Started {timeLabel(startedAt)}</span>
+          <span>{subagents > 0 ? `${subagents} subagents` : "No subagents reported"}</span>
+        </div>
+        {events.map((event) => (
+          <div className="panel-task-event" key={event.id}>
+            <i />
+            <span>
+              <strong>
+                {event.eventType === "worker.activity"
+                  ? workerEventLabel(event.payload)
+                  : titleCase(event.eventType.replace("worker.", "").replace("task.", ""))}
+              </strong>
+              <small>{workerEventLabel(event.payload)}</small>
+            </span>
+            <time>{timeLabel(event.createdAt)}</time>
+          </div>
+        ))}
+        {task.summary && <p className="panel-task-summary">{task.summary}</p>}
+        {task.error && <p className="panel-task-error">{task.error}</p>}
+      </div>
+    </details>
+  );
+}
+
 function WorkerCard({
   task,
   fallbackObjective,
@@ -1426,8 +1602,20 @@ function WorkerCard({
     .filter((event) =>
       ["worker.activity", "worker.steered", "worker.steer_failed"].includes(event.eventType)
     )
-    .slice(-5);
+    .slice(-8);
   const active = ["queued", "preparing", "running"].includes(status);
+  const [now, setNow] = useState(Date.now());
+  const startedAt = task?.createdAt ? new Date(task.createdAt).getTime() : null;
+  const updatedAt = task?.updatedAt ? new Date(task.updatedAt).getTime() : null;
+  const elapsed =
+    startedAt && Number.isFinite(startedAt)
+      ? Math.max(0, (active ? now : updatedAt || now) - startedAt)
+      : null;
+  const subagentCount = new Set(
+    progress
+      .filter((event) => event.payload.subagent === true)
+      .map((event) => String(event.payload.toolUseId ?? event.id))
+  ).size;
   const statusLabel =
     status === "completed"
       ? "Completed"
@@ -1447,6 +1635,12 @@ function WorkerCard({
         ? "failed"
         : "running";
 
+  useEffect(() => {
+    if (!active) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [active]);
+
   return (
     <article className={`worker-card ${statusClass}`}>
       <div className="worker-card-heading">
@@ -1455,7 +1649,10 @@ function WorkerCard({
         </span>
         <div>
           <strong>Claude worker</strong>
-          <span>{statusLabel}</span>
+          <span>
+            {statusLabel}
+            {elapsed !== null ? ` · ${durationLabel(elapsed)}` : ""}
+          </span>
         </div>
         {active && task && (
           <button
@@ -1477,6 +1674,15 @@ function WorkerCard({
         )}
         <i className={`activity-status ${statusClass}`} aria-hidden="true" />
       </div>
+      <div className="worker-meta">
+        <span>{task?.workerModel || task?.profileId || "Claude CLI"}</span>
+        <span>{startedAt ? `Started ${timeLabel(startedAt)}` : "Starting now"}</span>
+        <span>
+          {subagentCount > 0
+            ? `${subagentCount} ${subagentCount === 1 ? "subagent" : "subagents"}`
+            : "No subagents reported"}
+        </span>
+      </div>
       <p className="worker-objective">{task?.objective ?? fallbackObjective}</p>
 
       {progress.length > 0 && !report && (
@@ -1489,10 +1695,19 @@ function WorkerCard({
                   setExpandedEvent((current) => (current === event.id ? null : event.id))
                 }
               >
-                {workerEventLabel(event.payload)}
+                <span>
+                  <strong>{workerEventLabel(event.payload)}</strong>
+                  <small>{timeLabel(event.createdAt)}</small>
+                </span>
                 <ChevronIcon className={expandedEvent === event.id ? "chevron open" : "chevron"} />
               </button>
-              {expandedEvent === event.id && <pre>{JSON.stringify(event.payload, null, 2)}</pre>}
+              {expandedEvent === event.id && (
+                <div className="worker-event-detail">
+                  {workerEventDetails(event.payload).map((detail) => (
+                    <p key={detail}>{detail}</p>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1702,7 +1917,8 @@ function uniqueProjects(projects: Project[]): Project[] {
 function messagesFromThread(thread: CodexThread): ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (const turn of thread.turns ?? []) {
-    for (const item of turn.items ?? []) {
+    const items = turn.items ?? [];
+    for (const item of items) {
       if (item.type === "userMessage") {
         const text =
           "content" in item
@@ -1713,6 +1929,23 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
             : "";
         if (text) messages.push({ id: item.id, role: "user", text: visibleUserText(text) });
       }
+    }
+
+    const hasWork = items.some((item) => item.type !== "userMessage");
+    if (hasWork) {
+      messages.push({
+        id: `work-${turn.id}`,
+        role: "work",
+        text: "",
+        turnId: turn.id,
+        workStatus: workStatus(turn.status),
+        startedAt: turn.startedAt ? turn.startedAt * 1000 : null,
+        completedAt: turn.completedAt ? turn.completedAt * 1000 : null,
+        durationMs: turn.durationMs ?? null,
+      });
+    }
+
+    for (const item of items) {
       if (item.type === "agentMessage" && "text" in item && item.text) {
         messages.push({ id: item.id, role: "assistant", text: item.text });
       }
@@ -1784,35 +2017,165 @@ function delegatedTaskFromValue(value: unknown): { id: string; objective: string
 }
 
 function workerEventLabel(payload: Record<string, unknown>): string {
+  const kind = typeof payload.kind === "string" ? payload.kind : "";
+  const tool = typeof payload.tool === "string" ? payload.tool : "";
+  if (kind === "subagent") {
+    const agent = typeof payload.agentType === "string" ? payload.agentType : "Claude";
+    return `Started ${agent} subagent`;
+  }
+  if (kind === "read") return "Read a file";
+  if (kind === "file") return tool === "Write" ? "Created a file" : "Edited a file";
+  if (kind === "search") return "Searched the workspace";
+  if (kind === "command") return "Ran a local command";
+  if (kind === "skill") return "Loaded a skill";
+  if (kind === "web") return "Searched the web";
+  if (kind === "task") return "Updated its task list";
   if (typeof payload.detail === "string") return payload.detail;
-  if (typeof payload.tool === "string") return `Using ${payload.tool}`;
+  if (tool) return `Used ${tool}`;
   return "Claude reported progress";
+}
+
+function workerEventDetails(payload: Record<string, unknown>): string[] {
+  return [
+    typeof payload.detail === "string" ? payload.detail : "",
+    typeof payload.objective === "string" ? payload.objective : "",
+    typeof payload.path === "string" ? payload.path : "",
+    typeof payload.tool === "string" ? `Tool: ${payload.tool}` : "",
+  ].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index);
+}
+
+function claudeSubagentSummary(tasks: Task[]): string {
+  const count = new Set(
+    tasks.flatMap((task) =>
+      task.events
+        .filter((event) => event.payload.subagent === true)
+        .map((event) => `${task.id}:${String(event.payload.toolUseId ?? event.id)}`)
+    )
+  ).size;
+  return count > 0
+    ? `${count} ${count === 1 ? "subagent" : "subagents"} reported`
+    : "No subagents reported";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function activitiesFromThread(thread: CodexThread): Activity[] {
-  const activities: Activity[] = [];
-  for (const turn of thread.turns ?? []) {
-    for (const item of turn.items ?? []) {
-      if (item.type === "mcpToolCall") {
-        activities.push({
-          id: item.id,
-          label:
-            "tool" in item
-              ? String(item.tool)
-                  .replace(/^tandem_/, "")
-                  .replaceAll("_", " ")
-              : "Tool call",
-          detail: "Completed in this conversation",
-          status: "completed",
-        });
-      }
-    }
+function startWorkMessage(
+  messages: ChatMessage[],
+  turnId: string,
+  startedAt: number
+): ChatMessage[] {
+  const existing = messages.findIndex(
+    (message) => message.role === "work" && message.turnId === turnId
+  );
+  if (existing >= 0) return messages;
+
+  const pending = messages.findLastIndex(
+    (message) =>
+      message.role === "work" &&
+      message.workStatus === "running" &&
+      message.turnId?.startsWith("pending-")
+  );
+  if (pending >= 0) {
+    return messages.map((message, index) =>
+      index === pending
+        ? {
+            ...message,
+            id: `work-${turnId}`,
+            turnId,
+            startedAt: message.startedAt ?? startedAt,
+          }
+        : message
+    );
   }
-  return activities;
+
+  return [
+    ...messages,
+    {
+      id: `work-${turnId}`,
+      role: "work",
+      text: "",
+      turnId,
+      workStatus: "running",
+      startedAt,
+    },
+  ];
+}
+
+function completeWorkMessage(
+  messages: ChatMessage[],
+  turnId: string,
+  status: string,
+  completedAt: number
+): ChatMessage[] {
+  const index = messages.findIndex(
+    (message) => message.role === "work" && message.turnId === turnId
+  );
+  if (index < 0) return completeLatestWorkMessage(messages, workStatus(status), completedAt);
+  return messages.map((message, messageIndex) => {
+    if (messageIndex !== index) return message;
+    return {
+      ...message,
+      workStatus: workStatus(status),
+      completedAt,
+      durationMs: Math.max(0, completedAt - (message.startedAt ?? completedAt)),
+    };
+  });
+}
+
+function completeLatestWorkMessage(
+  messages: ChatMessage[],
+  status: ChatMessage["workStatus"],
+  completedAt: number
+): ChatMessage[] {
+  const index = messages.findLastIndex(
+    (message) => message.role === "work" && message.workStatus === "running"
+  );
+  if (index < 0) return messages;
+  return messages.map((message, messageIndex) =>
+    messageIndex === index
+      ? {
+          ...message,
+          workStatus: status,
+          completedAt,
+          durationMs: Math.max(0, completedAt - (message.startedAt ?? completedAt)),
+        }
+      : message
+  );
+}
+
+function workStatus(status: string): NonNullable<ChatMessage["workStatus"]> {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("interrupt") || normalized.includes("cancel")) return "interrupted";
+  if (normalized.includes("fail") || normalized.includes("error")) return "failed";
+  if (normalized.includes("progress") || normalized.includes("running")) return "running";
+  return "completed";
+}
+
+function addSkillActivities(
+  activities: Activity[],
+  skills: SkillOption[],
+  turnId: string,
+  detail: string
+): Activity[] {
+  const observedAt = Date.now();
+  return skills.reduce(
+    (current, skill) =>
+      upsertActivity(current, {
+        id: `skill-${turnId}-${skill.path}`,
+        turnId,
+        provider: "codex",
+        kind: "skill",
+        label: `Added ${skill.name}`,
+        detail,
+        status: "completed",
+        startedAt: observedAt,
+        completedAt: observedAt,
+        details: [skill.description, skill.path],
+      }),
+    activities
+  );
 }
 
 function appendAssistantDelta(
@@ -1840,28 +2203,4 @@ function completeAssistantMessage(messages: ChatMessage[], item: CodexItem): Cha
   return messages.map((message, messageIndex) =>
     messageIndex === index ? { ...message, text: String(item.text), streaming: false } : message
   );
-}
-
-function upsertActivity(activities: Activity[], next: Activity): Activity[] {
-  const index = activities.findIndex((activity) => activity.id === next.id);
-  if (index < 0) return [next, ...activities];
-  return activities.map((activity, activityIndex) => (activityIndex === index ? next : activity));
-}
-
-function mergeTaskActivities(activities: Activity[], tasks: Task[]): Activity[] {
-  const byId = new Map(activities.map((activity) => [activity.id, activity]));
-  for (const task of tasks.slice(0, 20)) {
-    byId.set(`task-${task.id}`, {
-      id: `task-${task.id}`,
-      label: task.objective,
-      detail: task.summary || task.error || `${task.runtime} · ${task.status}`,
-      status:
-        task.status === "failed" || task.status === "blocked"
-          ? "failed"
-          : task.status === "completed" || task.status === "canceled"
-            ? "completed"
-            : "running",
-    });
-  }
-  return [...byId.values()];
 }

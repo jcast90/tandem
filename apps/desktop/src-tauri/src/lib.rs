@@ -56,16 +56,20 @@ struct GoalView {
 struct TaskView {
     id: String,
     goal_id: Option<String>,
+    profile_id: String,
     repo_root: String,
     worktree_path: String,
     objective: String,
     status: String,
     runtime: String,
     runtime_ref: Option<String>,
+    worker_model: Option<String>,
+    permission_mode: Option<String>,
     commit_sha: Option<String>,
     summary: Option<String>,
     report: Option<Value>,
     error: Option<String>,
+    created_at: String,
     updated_at: String,
     events: Vec<TaskEventView>,
 }
@@ -798,32 +802,36 @@ fn read_tasks(home: &Path) -> Vec<TaskView> {
 fn read_tasks_from_connection(connection: &Connection) -> Vec<TaskView> {
     connection
         .prepare(
-            "SELECT id, goal_id, repo_root, worktree_path, objective, status,
-                    runtime, runtime_ref, commit_sha, summary, report_json,
-                    error, updated_at
+            "SELECT id, goal_id, profile_id, repo_root, worktree_path, objective, status,
+                    runtime, runtime_ref, worker_model, permission_mode, commit_sha, summary,
+                    report_json, error, created_at, updated_at
              FROM tasks ORDER BY updated_at DESC LIMIT 100",
         )
         .and_then(|mut statement| {
             statement
                 .query_map([], |row| {
                     let task_id: String = row.get(0)?;
-                    let report_json: Option<String> = row.get(10)?;
+                    let report_json: Option<String> = row.get(13)?;
                     Ok(TaskView {
                         events: read_task_events(connection, &task_id),
                         id: task_id,
                         goal_id: row.get(1)?,
-                        repo_root: row.get(2)?,
-                        worktree_path: row.get(3)?,
-                        objective: row.get(4)?,
-                        status: row.get(5)?,
-                        runtime: row.get(6)?,
-                        runtime_ref: row.get(7)?,
-                        commit_sha: row.get(8)?,
-                        summary: row.get(9)?,
+                        profile_id: row.get(2)?,
+                        repo_root: row.get(3)?,
+                        worktree_path: row.get(4)?,
+                        objective: row.get(5)?,
+                        status: row.get(6)?,
+                        runtime: row.get(7)?,
+                        runtime_ref: row.get(8)?,
+                        worker_model: row.get(9)?,
+                        permission_mode: row.get(10)?,
+                        commit_sha: row.get(11)?,
+                        summary: row.get(12)?,
                         report: report_json
                             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok()),
-                        error: row.get(11)?,
-                        updated_at: row.get(12)?,
+                        error: row.get(14)?,
+                        created_at: row.get(15)?,
+                        updated_at: row.get(16)?,
                     })
                 })?
                 .collect()

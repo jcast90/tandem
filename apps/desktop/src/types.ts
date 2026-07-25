@@ -19,16 +19,20 @@ export interface Goal {
 export interface Task {
   id: string;
   goalId: string | null;
+  profileId: string;
   repoRoot: string;
   worktreePath: string;
   objective: string;
   status: string;
   runtime: string;
   runtimeRef: string | null;
+  workerModel: string | null;
+  permissionMode: string | null;
   commitSha: string | null;
   summary: string | null;
   report: WorkerReport | null;
   error: string | null;
+  createdAt: string;
   updatedAt: string;
   events: TaskEvent[];
 }
@@ -124,6 +128,7 @@ export interface CodexThread {
   name: string | null;
   preview: string;
   cwd: string;
+  createdAt: number;
   updatedAt: number;
   turns: CodexTurn[];
 }
@@ -131,7 +136,24 @@ export interface CodexThread {
 export interface CodexTurn {
   id: string;
   status: string;
+  startedAt?: number | null;
+  completedAt?: number | null;
+  durationMs?: number | null;
   items: CodexItem[];
+}
+
+export interface CodexCommandAction {
+  type: "read" | "listFiles" | "search" | "unknown";
+  command: string;
+  path?: string | null;
+  name?: string;
+  query?: string | null;
+}
+
+export interface CodexFileChange {
+  path: string;
+  kind: string;
+  diff: string;
 }
 
 export type CodexItem =
@@ -153,6 +175,7 @@ export type CodexItem =
       tool: string;
       status: string;
       arguments?: unknown;
+      durationMs?: number | null;
       result?: unknown;
       error?: unknown;
     }
@@ -162,19 +185,107 @@ export type CodexItem =
       command: string;
       status: string;
       aggregatedOutput?: string | null;
+      commandActions?: CodexCommandAction[];
+      cwd?: string;
+      durationMs?: number | null;
+      exitCode?: number | null;
+    }
+  | {
+      type: "fileChange";
+      id: string;
+      changes: CodexFileChange[];
+      status: string;
+    }
+  | {
+      type: "dynamicToolCall";
+      id: string;
+      namespace?: string | null;
+      tool: string;
+      status: string;
+      arguments?: unknown;
+      durationMs?: number | null;
+      success?: boolean | null;
+    }
+  | {
+      type: "collabAgentToolCall";
+      id: string;
+      tool: "spawnAgent" | "sendInput" | "resumeAgent" | "wait" | "closeAgent";
+      status: string;
+      senderThreadId: string;
+      receiverThreadIds: string[];
+      prompt?: string | null;
+      model?: string | null;
+      agentsStates?: Record<string, { status: string; message?: string | null }>;
+    }
+  | {
+      type: "subAgentActivity";
+      id: string;
+      agentThreadId: string;
+      agentPath: string;
+      kind: "started" | "interacted" | "interrupted";
+    }
+  | {
+      type: "webSearch";
+      id: string;
+      query: string;
+      action?: unknown;
+    }
+  | {
+      type: "imageView";
+      id: string;
+      path: string;
+    }
+  | {
+      type: "plan";
+      id: string;
+      text: string;
+    }
+  | {
+      type: "reasoning";
+      id: string;
+      summary?: string[];
+      content?: string[];
     };
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "worker";
+  role: "user" | "assistant" | "worker" | "work";
   text: string;
   taskId?: string;
+  turnId?: string;
+  workStatus?: "running" | "completed" | "failed" | "interrupted";
+  startedAt?: number | null;
+  completedAt?: number | null;
+  durationMs?: number | null;
   streaming?: boolean;
 }
 
+export type ActivityProvider = "codex" | "claude";
+export type ActivityKind =
+  | "command"
+  | "read"
+  | "search"
+  | "file"
+  | "skill"
+  | "tool"
+  | "delegation"
+  | "subagent"
+  | "web"
+  | "plan"
+  | "image";
+
 export interface Activity {
   id: string;
+  turnId?: string | undefined;
+  provider: ActivityProvider;
+  kind: ActivityKind;
   label: string;
   detail: string;
   status: "running" | "completed" | "failed";
+  startedAt?: number | undefined;
+  completedAt?: number | undefined;
+  durationMs?: number | null | undefined;
+  path?: string | undefined;
+  details?: string[] | undefined;
+  subagentIds?: string[] | undefined;
 }

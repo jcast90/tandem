@@ -101,8 +101,9 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
         resultEvent = event;
         child.stdin.end();
       }
-      const activity = extractActivity(event);
-      if (activity) hooks.onActivity("worker.activity", activity);
+      for (const activity of extractActivities(event)) {
+        hooks.onActivity("worker.activity", activity);
+      }
     });
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
@@ -207,33 +208,73 @@ function parseReport(event: Record<string, unknown>): WorkerReport {
   throw new Error("Claude result did not contain a valid structured worker report.");
 }
 
-function extractActivity(event: Record<string, unknown>): Record<string, unknown> | null {
-  if (event.type !== "assistant" || !isObject(event.message)) return null;
+function extractActivities(event: Record<string, unknown>): Record<string, unknown>[] {
+  if (event.type !== "assistant" || !isObject(event.message)) return [];
   const content = event.message.content;
-  if (!Array.isArray(content)) return null;
-  const tool = content.find(
-    (item) => isObject(item) && item.type === "tool_use" && typeof item.name === "string"
-  );
-  if (!isObject(tool) || typeof tool.name !== "string") return null;
-  return {
-    tool: tool.name,
-    detail: describeToolUse(tool.name, tool.input),
-  };
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((item) => {
+    if (!isObject(item) || item.type !== "tool_use" || typeof item.name !== "string") return [];
+    const metadata = describeToolUse(item.name, item.input);
+    return [
+      {
+        tool: item.name,
+        toolUseId: typeof item.id === "string" ? item.id : undefined,
+        ...metadata,
+      },
+    ];
+  });
 }
 
-function describeToolUse(name: string, input: unknown): string {
-  if (!isObject(input)) return `Using ${name}`;
+function describeToolUse(name: string, input: unknown): Record<string, unknown> {
+  const kind = claudeActivityKind(name);
+  if (!isObject(input)) return { kind, detail: `Using ${name}` };
   const path =
     typeof input.file_path === "string"
       ? input.file_path
       : typeof input.path === "string"
         ? input.path
         : null;
-  if (path) return `${name}: ${truncate(path, 90)}`;
-  if (typeof input.description === "string") return truncate(input.description, 100);
-  if (typeof input.command === "string") return `${name}: ${truncate(input.command, 90)}`;
-  if (typeof input.pattern === "string") return `${name}: ${truncate(input.pattern, 90)}`;
-  return `Using ${name}`;
+  const description =
+    typeof input.description === "string"
+      ? input.description
+      : typeof input.prompt === "string"
+        ? input.prompt
+        : null;
+  const detail = path
+    ? `${name}: ${truncate(path, 90)}`
+    : description
+      ? truncate(description, 100)
+      : typeof input.command === "string"
+        ? `${name}: ${truncate(input.command, 90)}`
+        : typeof input.pattern === "string"
+          ? `${name}: ${truncate(input.pattern, 90)}`
+          : `Using ${name}`;
+  return {
+    kind,
+    detail,
+    path,
+    subagent: kind === "subagent",
+    agentType:
+      typeof input.subagent_type === "string"
+        ? input.subagent_type
+        : typeof input.agent === "string"
+          ? input.agent
+          : undefined,
+    objective: description ? truncate(description, 180) : undefined,
+  };
+}
+
+function claudeActivityKind(name: string): string {
+  const normalized = name.toLowerCase();
+  if (normalized === "task" || normalized === "agent") return "subagent";
+  if (["read", "notebookread"].includes(normalized)) return "read";
+  if (["write", "edit", "notebookedit"].includes(normalized)) return "file";
+  if (["grep", "glob", "ls", "search"].includes(normalized)) return "search";
+  if (normalized === "bash") return "command";
+  if (normalized === "skill") return "skill";
+  if (normalized.startsWith("web")) return "web";
+  if (normalized.startsWith("task")) return "task";
+  return "tool";
 }
 
 function safeJsonObject(line: string): Record<string, unknown> | null {
