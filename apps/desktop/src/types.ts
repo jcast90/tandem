@@ -83,6 +83,13 @@ export interface PluginOption {
 
 export type PermissionMode = "ask" | "auto" | "full";
 export type ProviderRoute = "auto" | "codex" | "claude";
+export type ResolvedProviderRoute = Exclude<ProviderRoute, "auto">;
+
+export interface RoutingDecision {
+  mode: ProviderRoute;
+  provider: ResolvedProviderRoute;
+  reason: string;
+}
 
 export interface ComposerAttachment {
   path: string;
@@ -257,6 +264,7 @@ export interface ChatMessage {
   startedAt?: number | null;
   completedAt?: number | null;
   durationMs?: number | null;
+  routing?: RoutingDecision;
   streaming?: boolean;
 }
 

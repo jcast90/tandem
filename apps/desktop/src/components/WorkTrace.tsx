@@ -23,6 +23,10 @@ export function WorkTrace({
     () => new Set(activities.flatMap((activity) => activity.subagentIds ?? [])).size,
     [activities]
   );
+  const claudeAssigned = activities.some(
+    (activity) =>
+      activity.kind === "delegation" && activity.label.includes("Assigned work to Claude")
+  );
   const elapsed =
     message.durationMs ??
     Math.max(0, (message.completedAt ?? now) - (message.startedAt ?? message.completedAt ?? now));
@@ -74,6 +78,14 @@ export function WorkTrace({
                     : ""
                 }`}
           </small>
+          {message.routing && (
+            <small className={`work-route-summary ${message.routing.provider}`}>
+              {message.routing.mode === "auto"
+                ? `Auto → ${providerName(message.routing.provider)}`
+                : providerName(message.routing.provider)}
+              <span> · {message.routing.reason}</span>
+            </small>
+          )}
         </span>
         <ChevronIcon className={expanded ? "chevron open" : "chevron"} />
       </button>
@@ -99,6 +111,19 @@ export function WorkTrace({
             ))
           )}
           <div className="work-trace-footnote">
+            {message.routing?.provider === "claude" && (
+              <span
+                className={
+                  claudeAssigned ? "route-confirmation assigned" : "route-confirmation pending"
+                }
+              >
+                {claudeAssigned
+                  ? "Claude worker assignment confirmed"
+                  : running
+                    ? "Waiting for Claude worker assignment"
+                    : "Claude was selected, but no worker was assigned"}
+              </span>
+            )}
             <span>
               {subagentCount > 0
                 ? `${subagentCount} Codex ${subagentCount === 1 ? "subagent" : "subagents"} reported`
@@ -110,6 +135,10 @@ export function WorkTrace({
       )}
     </section>
   );
+}
+
+function providerName(provider: "codex" | "claude"): string {
+  return provider === "claude" ? "Claude" : "Codex";
 }
 
 function WorkStep({

@@ -26,6 +26,12 @@ import {
   upsertActivity,
 } from "./lib/activity";
 import { CodexConnection } from "./lib/codex";
+import {
+  conversationRoutingContext,
+  resolveRoute,
+  routingDecisionFromText,
+  routingPrompt,
+} from "./lib/routing";
 import type {
   Activity,
   Bootstrap,
@@ -38,6 +44,7 @@ import type {
   PermissionMode,
   PluginOption,
   ProviderRoute,
+  RoutingDecision,
   SkillOption,
   Task,
   TaskFile,
@@ -343,6 +350,15 @@ export function App() {
     () => models.find((model) => model.model === codexModel || model.id === codexModel),
     [codexModel, models]
   );
+  const routePreview = useMemo(
+    () =>
+      resolveRoute(providerRoute, {
+        text: composer,
+        recentMessages: conversationRoutingContext(messages),
+        attachments,
+      }),
+    [attachments, composer, messages, providerRoute]
+  );
 
   const chooseProject = async () => {
     const selection = await open({
@@ -566,9 +582,14 @@ export function App() {
     setChatMenuId("");
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text }]);
     const selectedSkills = skills.filter((skill) => selectedSkillPaths.includes(skill.path));
+    const routing = resolveRoute(providerRoute, {
+      text,
+      recentMessages: conversationRoutingContext(messages),
+      attachments,
+    });
     const routedText = routingPrompt(
       text,
-      providerRoute,
+      routing,
       claudeModel,
       claudePermissionMode(permissionMode)
     );
@@ -601,7 +622,9 @@ export function App() {
       submissionEpoch = ++submissionEpochRef.current;
       allowTurnEventsRef.current = true;
       setGenerating(true);
-      setMessages((current) => startWorkMessage(current, `pending-${submissionEpoch}`, Date.now()));
+      setMessages((current) =>
+        startWorkMessage(current, `pending-${submissionEpoch}`, Date.now(), routing)
+      );
       let thread = activeThread;
       if (!thread) {
         thread = await connection.startThread(activeProject, turnOptions);
@@ -624,7 +647,7 @@ export function App() {
       setComposerMenu(null);
       activeTurnRef.current = turnId;
       setActiveTurnId(turnId);
-      setMessages((current) => startWorkMessage(current, turnId, Date.now()));
+      setMessages((current) => startWorkMessage(current, turnId, Date.now(), routing));
       setActivities((current) =>
         addSkillActivities(current, selectedSkills, turnId, "Attached to this turn")
       );
@@ -1104,7 +1127,7 @@ export function App() {
                   <div className="route-options">
                     {(
                       [
-                        ["auto", "Auto", "Codex decides when Claude should execute"],
+                        ["auto", "Auto", "Chooses the best provider for each request"],
                         ["codex", "Codex", "Keep the work with the outer agent"],
                         ["claude", "Claude", "Delegate this request to a worker"],
                       ] as const
@@ -1123,9 +1146,21 @@ export function App() {
                       </button>
                     ))}
                   </div>
+                  {providerRoute === "auto" && composer.trim() && (
+                    <div className={`route-preview ${routePreview.provider}`}>
+                      <span>Auto would use {titleCase(routePreview.provider)}</span>
+                      <small>{routePreview.reason}</small>
+                    </div>
+                  )}
                   <div className="route-models">
-                    <span>{providerRoute === "claude" ? "Claude model" : "Codex model"}</span>
-                    {providerRoute === "claude" ? (
+                    <span>
+                      {providerRoute === "claude" ||
+                      (providerRoute === "auto" && routePreview.provider === "claude")
+                        ? "Claude model"
+                        : "Codex model"}
+                    </span>
+                    {providerRoute === "claude" ||
+                    (providerRoute === "auto" && routePreview.provider === "claude") ? (
                       <div className="model-pills">
                         {[
                           ["", "Default"],
@@ -1278,11 +1313,15 @@ export function App() {
                   >
                     <span>{routeLabel(providerRoute)}</span>
                     <small>
-                      {providerRoute === "claude"
-                        ? claudeModel
-                          ? titleCase(claudeModel)
-                          : "Default"
-                        : selectedCodexModel?.displayName || "Codex"}
+                      {providerRoute === "auto" && !composer.trim()
+                        ? "Adaptive"
+                        : providerRoute === "auto"
+                          ? `→ ${titleCase(routePreview.provider)}`
+                          : providerRoute === "claude"
+                            ? claudeModel
+                              ? titleCase(claudeModel)
+                              : "Default"
+                            : selectedCodexModel?.displayName || "Codex"}
                     </small>
                     <ChevronIcon />
                   </button>
@@ -1873,22 +1912,6 @@ function claudePermissionMode(mode: PermissionMode): string {
   return "acceptEdits";
 }
 
-function routingPrompt(
-  text: string,
-  route: ProviderRoute,
-  claudeModel: string,
-  workerPermission: string
-): string {
-  if (route === "auto") return text;
-  const directive =
-    route === "codex"
-      ? "Handle this request with Codex only. Do not call tandem_delegate."
-      : `Delegate this entire request through tandem_delegate, wait for the worker, and report its result. Pass permission_mode="${workerPermission}"${
-          claudeModel ? ` and model="${claudeModel}"` : ""
-        } to tandem_delegate.`;
-  return `${text}\n\n<tandem-routing>${directive}</tandem-routing>`;
-}
-
 function visibleUserText(text: string): string {
   return text.replace(/\n*\n*<tandem-routing>[\s\S]*?<\/tandem-routing>/g, "").trim();
 }
@@ -1918,6 +1941,7 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (const turn of thread.turns ?? []) {
     const items = turn.items ?? [];
+    let routing: RoutingDecision | null = null;
     for (const item of items) {
       if (item.type === "userMessage") {
         const text =
@@ -1927,7 +1951,10 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
                 .map((part) => part.text ?? "")
                 .join("\n")
             : "";
-        if (text) messages.push({ id: item.id, role: "user", text: visibleUserText(text) });
+        if (text) {
+          routing = routingDecisionFromText(text);
+          messages.push({ id: item.id, role: "user", text: visibleUserText(text) });
+        }
       }
     }
 
@@ -1942,6 +1969,7 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
         startedAt: turn.startedAt ? turn.startedAt * 1000 : null,
         completedAt: turn.completedAt ? turn.completedAt * 1000 : null,
         durationMs: turn.durationMs ?? null,
+        ...(routing ? { routing } : {}),
       });
     }
 
@@ -2064,12 +2092,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function startWorkMessage(
   messages: ChatMessage[],
   turnId: string,
-  startedAt: number
+  startedAt: number,
+  routing?: ChatMessage["routing"]
 ): ChatMessage[] {
   const existing = messages.findIndex(
     (message) => message.role === "work" && message.turnId === turnId
   );
-  if (existing >= 0) return messages;
+  if (existing >= 0) {
+    return routing
+      ? messages.map((message, index) =>
+          index === existing && !message.routing ? { ...message, routing } : message
+        )
+      : messages;
+  }
 
   const pending = messages.findLastIndex(
     (message) =>
@@ -2085,6 +2120,7 @@ function startWorkMessage(
             id: `work-${turnId}`,
             turnId,
             startedAt: message.startedAt ?? startedAt,
+            ...(routing ? { routing } : {}),
           }
         : message
     );
@@ -2099,6 +2135,7 @@ function startWorkMessage(
       turnId,
       workStatus: "running",
       startedAt,
+      ...(routing ? { routing } : {}),
     },
   ];
 }

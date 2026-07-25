@@ -51,7 +51,11 @@ orchestration core:
   native turn input. Files and folders can be attached as local context, while
   installed plugins remain available through their owning CLI session.
 - The composer can leave routing on Auto, keep a request with Codex, or require
-  delegation to Claude. Codex models and reasoning effort are discovered from
+  delegation to Claude. Auto keeps discussion, research, planning, review, and
+  small bounded changes with Codex while routing substantive implementation,
+  debugging, verification, and long-running execution to Claude. Short
+  follow-ups use recent conversation context, and each turn shows the selected
+  provider and reason. Codex models and reasoning effort are discovered from
   the authenticated local app-server; Claude model aliases and permission
   overrides flow into each delegated work order.
 - Ask, auto-approve, and full-access permission modes map to the corresponding
