@@ -1,6 +1,7 @@
 import TauriWebSocket from "@tauri-apps/plugin-websocket";
+import type { Message as WebSocketMessage } from "@tauri-apps/plugin-websocket";
 
-import { activityFromItem } from "./activity";
+import { activityFromItem } from "./activity.js";
 import type {
   Activity,
   CodexItem,
@@ -11,9 +12,20 @@ import type {
   PluginOption,
   SkillOption,
   TurnOptions,
-} from "../types";
+} from "../types.js";
 
 type JsonObject = Record<string, unknown>;
+
+interface CodexSocket {
+  addListener(listener: (message: WebSocketMessage) => void): () => void;
+  send(message: string): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
+type ConnectSocket = (endpoint: string) => Promise<CodexSocket>;
+
+const HEARTBEAT_INTERVAL_MS = 5_000;
+const HEARTBEAT_TIMEOUT_MS = 4_000;
 
 interface RpcResponse {
   id: number;
@@ -34,10 +46,11 @@ export interface CodexEvents {
   onTurnComplete: (turnId: string, status: string) => void;
   onActivity: (activity: Activity) => void;
   onError: (message: string) => void;
+  onDisconnect: (message: string) => void;
 }
 
 export class CodexConnection {
-  private socket: TauriWebSocket | null = null;
+  private socket: CodexSocket | null = null;
   private nextId = 1;
   private readonly pending = new Map<
     number,
@@ -48,13 +61,18 @@ export class CodexConnection {
     }
   >();
   private readonly activityById = new Map<string, Activity>();
+  private closed = false;
+  private heartbeatTimer: number | null = null;
 
   constructor(
     private readonly endpoint: string,
-    private readonly events: CodexEvents
+    private readonly events: CodexEvents,
+    private readonly connectSocket: ConnectSocket = (endpoint) => TauriWebSocket.connect(endpoint)
   ) {}
 
   async connect(): Promise<void> {
+    this.closed = false;
+    this.stopHeartbeat();
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < 25; attempt += 1) {
       try {
@@ -72,10 +90,13 @@ export class CodexConnection {
           },
         });
         this.notify("initialized");
+        this.scheduleHeartbeat();
         return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        void this.socket?.disconnect();
+        const socket = this.socket;
+        this.socket = null;
+        void socket?.disconnect();
         await new Promise((resolve) => window.setTimeout(resolve, 120));
       }
     }
@@ -83,8 +104,11 @@ export class CodexConnection {
   }
 
   close(): void {
-    void this.socket?.disconnect();
+    this.closed = true;
+    this.stopHeartbeat();
+    const socket = this.socket;
     this.socket = null;
+    void socket?.disconnect();
     for (const pending of this.pending.values()) {
       window.clearTimeout(pending.timeout);
       pending.reject(new Error("Codex connection closed."));
@@ -225,24 +249,23 @@ export class CodexConnection {
   }
 
   private async open(): Promise<void> {
-    const socket = await TauriWebSocket.connect(this.endpoint);
+    const socket = await this.connectSocket(this.endpoint);
     socket.addListener((message) => {
       if (message.type === "Text") this.handleMessage(message.data);
-      if (message.type === "Close") {
-        this.socket = null;
-        this.failPending("The local Codex service closed the connection.");
+      if (message.type === "Close" && this.socket === socket) {
+        this.handleDisconnect("The local Codex service closed the connection.");
       }
     });
     this.socket = socket;
   }
 
-  private request(method: string, params: JsonObject): Promise<unknown> {
+  private request(method: string, params: JsonObject, timeoutMs = 15_000): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${method} timed out while waiting for the local Codex service.`));
-      }, 15_000);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
       void this.send({ method, id, params }).catch((error) => {
         const pending = this.pending.get(id);
@@ -297,6 +320,38 @@ export class CodexConnection {
       pending.reject(new Error(message));
     }
     this.pending.clear();
+  }
+
+  private scheduleHeartbeat(): void {
+    this.stopHeartbeat();
+    if (this.closed || !this.socket) return;
+    this.heartbeatTimer = window.setTimeout(() => {
+      this.heartbeatTimer = null;
+      void this.request(
+        "thread/list",
+        { limit: 1, sortKey: "updated_at", sortDirection: "desc", archived: false },
+        HEARTBEAT_TIMEOUT_MS
+      )
+        .then(() => this.scheduleHeartbeat())
+        .catch(() => this.handleDisconnect("The local Codex service stopped responding."));
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      window.clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private handleDisconnect(detail: string): void {
+    if (this.closed || !this.socket) return;
+    this.stopHeartbeat();
+    const socket = this.socket;
+    this.socket = null;
+    void socket.disconnect();
+    this.failPending(detail);
+    this.events.onDisconnect(detail);
   }
 
   private handleNotification(message: RpcNotification): void {

@@ -27,6 +27,7 @@ import {
   upsertActivity,
 } from "./lib/activity";
 import { CodexConnection } from "./lib/codex";
+import { MAX_RECONNECT_ATTEMPTS, reconnectDelayMs } from "./lib/reconnect";
 import {
   conciseGoalObjective,
   conversationRoutingContext,
@@ -141,6 +142,13 @@ export function App() {
   const allowTurnEventsRef = useRef(false);
   const activeTurnRef = useRef("");
   const turnMetadataRef = useRef(new Map<string, WorkMetadata>());
+  const connectionEpochRef = useRef(0);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const connectRef = useRef<
+    ((projectRoot: string, forceRestart?: boolean) => Promise<void>) | null
+  >(null);
+  const scheduleReconnectRef = useRef<((projectRoot: string, detail: string) => void) | null>(null);
 
   const refreshBootstrap = useCallback(async () => {
     const next = await invoke<Bootstrap>("desktop_bootstrap");
@@ -156,18 +164,60 @@ export function App() {
     return tasks;
   }, []);
 
+  const scheduleReconnect = useCallback((projectRoot: string, detail: string) => {
+    if (reconnectTimerRef.current !== null) return;
+    const attempt = reconnectAttemptRef.current + 1;
+    reconnectAttemptRef.current = attempt;
+    if (attempt > MAX_RECONNECT_ATTEMPTS) {
+      const message = `Tandem could not restore the local Codex service after ${MAX_RECONNECT_ATTEMPTS} attempts. ${detail}`;
+      setConnectionState("error");
+      setConnectionError(message);
+      setNotice(message);
+      setSettingsOpen(true);
+      return;
+    }
+
+    setConnectionState("starting");
+    setConnectionError("");
+    setNotice(`Codex disconnected. Reconnecting… (${attempt}/${MAX_RECONNECT_ATTEMPTS})`);
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      const reconnect = connectRef.current;
+      if (!reconnect) return;
+      void reconnect(projectRoot, true).catch((error) => {
+        scheduleReconnectRef.current?.(projectRoot, errorMessage(error));
+      });
+    }, reconnectDelayMs(attempt));
+  }, []);
+  scheduleReconnectRef.current = scheduleReconnect;
+
   const connect = useCallback(
     async (projectRoot: string, forceRestart = false) => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      const connectionEpoch = ++connectionEpochRef.current;
       connectionRef.current?.close();
+      connectionRef.current = null;
       submissionEpochRef.current += 1;
       allowTurnEventsRef.current = false;
+      const interruptedTurn = activeTurnRef.current;
       activeTurnRef.current = "";
+      setActiveTurnId("");
+      setGenerating(false);
+      if (interruptedTurn) {
+        setMessages((current) =>
+          completeWorkSegments(current, interruptedTurn, "interrupted", Date.now())
+        );
+      }
       setConnectionState("starting");
       setConnectionError("");
       const { endpoint } = await invoke<{ endpoint: string }>("start_codex", {
         projectRoot,
         forceRestart,
       });
+      if (connectionEpoch !== connectionEpochRef.current) return;
       const connection = new CodexConnection(endpoint, {
         onDelta: (itemId, delta) => {
           setMessages((current) =>
@@ -240,8 +290,32 @@ export function App() {
           );
         },
         onError: (message) => setNotice(message),
+        onDisconnect: (message) => {
+          if (
+            connectionEpoch !== connectionEpochRef.current ||
+            connectionRef.current !== connection
+          ) {
+            return;
+          }
+          connectionRef.current = null;
+          const turnId = activeTurnRef.current;
+          activeTurnRef.current = "";
+          allowTurnEventsRef.current = false;
+          setActiveTurnId("");
+          setGenerating(false);
+          if (turnId) {
+            setMessages((current) =>
+              completeWorkSegments(current, turnId, "interrupted", Date.now())
+            );
+          }
+          scheduleReconnectRef.current?.(projectRoot, message);
+        },
       });
       await connection.connect();
+      if (connectionEpoch !== connectionEpochRef.current) {
+        connection.close();
+        return;
+      }
       connectionRef.current = connection;
       const recent = await connection.listThreads();
       setThreads(recent);
@@ -268,9 +342,14 @@ export function App() {
       }
       setConnectionState("ready");
       setConnectionError("");
+      reconnectAttemptRef.current = 0;
+      setNotice((current) =>
+        current.startsWith("Codex disconnected.") ? "Reconnected." : current
+      );
     },
     [refreshBootstrap, refreshTasks]
   );
+  connectRef.current = connect;
 
   const recordConnectionError = useCallback((error: unknown) => {
     const message =
@@ -285,9 +364,11 @@ export function App() {
 
   useEffect(() => {
     let canceled = false;
+    let reconnectProject = "";
     void refreshBootstrap()
       .then(async (data) => {
         if (canceled) return;
+        reconnectProject = data.projectRoot;
         const stored = readStoredProjects();
         const initial = uniqueProjects([
           ...stored,
@@ -301,13 +382,23 @@ export function App() {
         await connect(data.projectRoot);
       })
       .catch((error) => {
-        recordConnectionError(error);
+        if (canceled) return;
+        if (reconnectProject) {
+          scheduleReconnect(reconnectProject, errorMessage(error));
+        } else {
+          recordConnectionError(error);
+        }
       });
     return () => {
       canceled = true;
+      connectionEpochRef.current += 1;
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       connectionRef.current?.close();
     };
-  }, [connect, recordConnectionError, refreshBootstrap]);
+  }, [connect, recordConnectionError, refreshBootstrap, scheduleReconnect]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -2002,6 +2093,12 @@ function claudePermissionMode(mode: PermissionMode): string {
   if (mode === "ask") return "default";
   if (mode === "full") return "bypassPermissions";
   return "acceptEdits";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : String(error).trim() || "Tandem could not reach the local Codex service.";
 }
 
 async function createDurableGoals(

@@ -25,7 +25,7 @@ struct CodexProcess {
 
 impl Drop for CodexProcess {
     fn drop(&mut self) {
-        terminate_child(&mut self.child);
+        terminate_child_tree(&mut self.child);
     }
 }
 
@@ -602,12 +602,13 @@ fn start_codex_blocking(
         .stdin(Stdio::piped())
         .stdout(Stdio::from(app_server_log))
         .stderr(Stdio::from(app_server_error));
+    isolate_process_group(&mut command);
 
     let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start Codex app-server: {error}"))?;
     if let Err(error) = wait_for_endpoint(&endpoint, &mut child, Duration::from_secs(12)) {
-        terminate_child(&mut child);
+        terminate_child_tree(&mut child);
         return Err(format!(
             "{error} {}",
             recent_log_hint(&home.join("logs").join("codex-app-server.log"))
@@ -1162,22 +1163,99 @@ fn stop_codex(app: &tauri::AppHandle) {
     };
 }
 
-fn terminate_child(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_some() {
-        return;
+fn isolate_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
-    let _ = Command::new("/bin/kill")
-        .arg("-TERM")
-        .arg(child.id().to_string())
-        .status();
+}
+
+fn terminate_child_tree(child: &mut Child) {
+    signal_child_tree(child, false);
     for _ in 0..20 {
-        if child.try_wait().ok().flatten().is_some() {
+        let child_exited = child.try_wait().ok().flatten().is_some();
+        if child_exited && !child_tree_alive(child.id()) {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let _ = child.kill();
+    signal_child_tree(child, true);
     let _ = child.wait();
+}
+
+fn signal_child_tree(child: &mut Child, force: bool) {
+    #[cfg(unix)]
+    unsafe {
+        let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+        // Every Codex launcher is placed in its own process group. Signaling the
+        // negative group ID reaches the Node launcher, native Codex binary, and
+        // MCP descendants without touching Tandem itself.
+        let _ = libc::kill(-(child.id() as i32), signal);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
+fn child_tree_alive(child_id: u32) -> bool {
+    #[cfg(unix)]
+    unsafe {
+        if libc::kill(-(child_id as i32), 0) == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child_id;
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn terminates_descendant_listener_after_launcher_exits() {
+        let reserved = TcpListener::bind("127.0.0.1:0").expect("reserve test port");
+        let port = reserved.local_addr().expect("read test port").port();
+        drop(reserved);
+
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(format!(
+            "trap '' HUP; /usr/bin/nc -lk 127.0.0.1 {port} >/dev/null 2>&1 &"
+        ));
+        isolate_process_group(&mut command);
+        let mut child = command.spawn().expect("spawn launcher and descendant");
+        let endpoint = format!("ws://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !endpoint_ready(&endpoint) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            endpoint_ready(&endpoint),
+            "descendant listener became ready"
+        );
+        assert!(
+            child.wait().expect("launcher exited").success(),
+            "launcher should exit before its descendant"
+        );
+
+        terminate_child_tree(&mut child);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while endpoint_ready(&endpoint) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !endpoint_ready(&endpoint),
+            "descendant listener survived launcher termination"
+        );
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

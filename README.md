@@ -69,6 +69,9 @@ orchestration core:
   into an IDE or monitoring dashboard.
 - Connections settings show each CLI's resolved path, version, and subscription
   authentication state, with retry, login, and diagnostic-log actions.
+- Tandem health-checks its local Codex service, restarts it with bounded backoff
+  after a dropped or silent connection, and cleans up the full Codex/MCP process
+  tree when reconnecting or quitting.
 - Finder-launched builds discover CLIs installed by NVM, asdf, Homebrew, Bun,
   pnpm, and common user-local paths without relying on an inherited terminal
   `PATH`.
