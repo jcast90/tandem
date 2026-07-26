@@ -887,7 +887,7 @@ fn read_task_events(connection: &Connection, task_id: &str) -> Vec<TaskEventView
         .prepare(
             "SELECT id, type, payload_json, created_at
              FROM task_events WHERE task_id = ?
-             ORDER BY id DESC LIMIT 12",
+             ORDER BY id DESC LIMIT 100",
         )
         .and_then(|mut statement| {
             statement

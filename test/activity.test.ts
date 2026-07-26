@@ -117,4 +117,74 @@ describe("desktop work activity", () => {
     ]);
     expect(durationLabel(71_000)).toBe("1m 11s");
   });
+
+  it("hides routine worker polling while preserving failed checks", () => {
+    const activities: Activity[] = [
+      {
+        id: "poll-ok",
+        provider: "codex",
+        kind: "delegation",
+        label: "Checked Claude worker progress",
+        detail: "Claude worker orchestration",
+        status: "completed",
+        visibility: "routine",
+      },
+      {
+        id: "poll-failed",
+        provider: "codex",
+        kind: "delegation",
+        label: "Checked Claude worker progress",
+        detail: "Connection failed",
+        status: "failed",
+        visibility: "routine",
+      },
+    ];
+
+    expect(groupActivities(activities)).toEqual([
+      expect.objectContaining({ id: "poll-failed", status: "failed" }),
+    ]);
+  });
+
+  it("condenses repeated non-routine actions into one expandable step", () => {
+    const activities: Activity[] = [
+      {
+        id: "one",
+        provider: "codex",
+        kind: "command",
+        label: "Inspected changes",
+        detail: "git status",
+        status: "completed",
+        details: ["git status"],
+        startedAt: 1_000,
+      },
+      {
+        id: "two",
+        provider: "codex",
+        kind: "command",
+        label: "Inspected changes",
+        detail: "git diff",
+        status: "completed",
+        details: ["git diff"],
+        startedAt: 2_000,
+      },
+      {
+        id: "three",
+        provider: "codex",
+        kind: "command",
+        label: "Inspected changes",
+        detail: "git log",
+        status: "completed",
+        details: ["git log"],
+        startedAt: 3_000,
+      },
+    ];
+
+    expect(groupActivities(activities)).toEqual([
+      expect.objectContaining({
+        label: "Inspected changes · 3 times",
+        count: 3,
+        details: ["git status", "git diff", "git log"],
+      }),
+    ]);
+  });
 });

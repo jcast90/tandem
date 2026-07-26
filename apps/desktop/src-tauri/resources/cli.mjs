@@ -4373,7 +4373,7 @@ var ClaudeCliWorkerAdapter = class {
         resultEvent = event;
         child.stdin.end();
       }
-      for (const activity of extractActivities(event)) {
+      for (const activity of extractClaudeActivities(event)) {
         hooks.onActivity("worker.activity", activity);
       }
     });
@@ -4468,12 +4468,39 @@ function parseReport(event) {
   }
   throw new Error("Claude result did not contain a valid structured worker report.");
 }
-function extractActivities(event) {
+function extractClaudeActivities(event) {
+  if (event.type === "system") {
+    const subtype = typeof event.subtype === "string" ? event.subtype : "";
+    const description = typeof event.description === "string" ? event.description : typeof event.summary === "string" ? event.summary : "";
+    if (subtype === "task_started" || subtype === "task_notification") {
+      return [
+        {
+          kind: "task",
+          tool: "Task",
+          detail: subtype === "task_started" ? description || "Started a background task" : `${description || "Background task"} \xB7 ${String(event.status ?? "updated")}`,
+          objective: description || void 0,
+          taskId: typeof event.task_id === "string" ? event.task_id : void 0,
+          subagent: false
+        }
+      ];
+    }
+    return [];
+  }
   if (event.type !== "assistant" || !isObject(event.message)) return [];
   const content = event.message.content;
   if (!Array.isArray(content)) return [];
   return content.flatMap((item) => {
-    if (!isObject(item) || item.type !== "tool_use" || typeof item.name !== "string") return [];
+    if (!isObject(item)) return [];
+    if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+      return [
+        {
+          kind: "progress",
+          detail: truncate(item.text, 180),
+          subagent: false
+        }
+      ];
+    }
+    if (item.type !== "tool_use" || typeof item.name !== "string") return [];
     const metadata = describeToolUse(item.name, item.input);
     return [
       {

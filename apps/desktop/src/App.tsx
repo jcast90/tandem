@@ -45,6 +45,13 @@ import {
   startWorkSegment,
   type WorkMetadata,
 } from "./lib/timeline";
+import {
+  groupWorkerActivities,
+  workerActivitiesFromTask,
+  workerEventDetails,
+  workerEventLabel,
+  workerSubagentCount,
+} from "./lib/workerActivity";
 import type {
   Activity,
   Bootstrap,
@@ -465,6 +472,10 @@ export function App() {
     [activeProject, bootstrap.tasks]
   );
   const visibleActivities = useMemo(() => groupActivities(activities), [activities]);
+  const claudeStepCount = useMemo(
+    () => projectTasks.reduce((count, task) => count + workerActivitiesFromTask(task).length, 0),
+    [projectTasks]
+  );
   const codexSubagentCount = useMemo(
     () => new Set(visibleActivities.flatMap((activity) => activity.subagentIds)).size,
     [visibleActivities]
@@ -1590,14 +1601,38 @@ export function App() {
                         : "No active worker"}
                     </span>
                   </p>
-                  <em>{projectTasks.length} tasks</em>
+                  <em>
+                    {claudeStepCount} {claudeStepCount === 1 ? "step" : "steps"}
+                  </em>
                   <small>{claudeSubagentSummary(projectTasks)}</small>
                 </div>
               </div>
 
               <section className="activity-section">
                 <div className="activity-section-heading">
-                  <strong>Conversation steps</strong>
+                  <strong>Claude work</strong>
+                  <span>{projectTasks.length}</span>
+                </div>
+                {projectTasks.length === 0 ? (
+                  <div className="activity-empty compact">
+                    <strong>No Claude worker was assigned</strong>
+                    <p>This conversation was handled directly by Codex.</p>
+                  </div>
+                ) : (
+                  projectTasks.map((task) => (
+                    <PanelTask
+                      key={task.id}
+                      task={task}
+                      goal={task.goalId ? goalById.get(task.goalId) : undefined}
+                      onOpenFile={(path) => void inspectFile(path)}
+                    />
+                  ))
+                )}
+              </section>
+
+              <section className="activity-section">
+                <div className="activity-section-heading">
+                  <strong>Codex steps</strong>
                   <span>{visibleActivities.length}</span>
                 </div>
                 {visibleActivities.length === 0 ? (
@@ -1635,21 +1670,6 @@ export function App() {
                       </div>
                     </details>
                   ))
-                )}
-              </section>
-
-              <section className="activity-section">
-                <div className="activity-section-heading">
-                  <strong>Claude tasks</strong>
-                  <span>{projectTasks.length}</span>
-                </div>
-                {projectTasks.length === 0 ? (
-                  <div className="activity-empty compact">
-                    <strong>No Claude worker was assigned</strong>
-                    <p>This conversation was handled directly by Codex.</p>
-                  </div>
-                ) : (
-                  projectTasks.map((task) => <PanelTask key={task.id} task={task} />)
                 )}
               </section>
             </div>
@@ -1731,28 +1751,23 @@ function EmptyConversation({ project }: { project: string }) {
   );
 }
 
-function PanelTask({ task }: { task: Task }) {
+function PanelTask({
+  task,
+  goal,
+  onOpenFile,
+}: {
+  task: Task;
+  goal?: Goal | undefined;
+  onOpenFile: (path: string) => void;
+}) {
   const startedAt = new Date(task.createdAt).getTime();
   const updatedAt = new Date(task.updatedAt).getTime();
   const active = ["queued", "preparing", "running"].includes(task.status);
   const duration = Math.max(0, (active ? Date.now() : updatedAt) - startedAt);
-  const events = task.events.filter((event) =>
-    [
-      "task.queued",
-      "worker.launched",
-      "worker.started",
-      "worker.activity",
-      "worker.steered",
-      "worker.completed",
-      "worker.failed",
-      "worker.blocked",
-    ].includes(event.eventType)
-  );
-  const subagents = new Set(
-    events
-      .filter((event) => event.payload.subagent === true)
-      .map((event) => String(event.payload.toolUseId ?? event.id))
-  ).size;
+  const steps = workerActivitiesFromTask(task);
+  const groups = groupWorkerActivities(task);
+  const subagents = workerSubagentCount(task);
+  const [expanded, setExpanded] = useState(active);
   const statusClass =
     task.status === "failed" || task.status === "blocked"
       ? "failed"
@@ -1761,7 +1776,11 @@ function PanelTask({ task }: { task: Task }) {
         : "running";
 
   return (
-    <details className="panel-task">
+    <details
+      className="panel-task"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
       <summary>
         <i className={`activity-status ${statusClass}`} aria-hidden="true" />
         <span>
@@ -1776,22 +1795,51 @@ function PanelTask({ task }: { task: Task }) {
         <div className="panel-task-meta">
           <span>{task.workerModel || task.profileId}</span>
           <span>Started {timeLabel(startedAt)}</span>
+          <span>
+            {steps.length} reported {steps.length === 1 ? "step" : "steps"}
+          </span>
           <span>{subagents > 0 ? `${subagents} subagents` : "No subagents reported"}</span>
         </div>
-        {events.map((event) => (
-          <div className="panel-task-event" key={event.id}>
-            <i />
+        {goal && (
+          <div className="panel-task-goal">
+            <i className={`goal-status ${goal.status}`} aria-hidden="true" />
             <span>
-              <strong>
-                {event.eventType === "worker.activity"
-                  ? workerEventLabel(event.payload)
-                  : titleCase(event.eventType.replace("worker.", "").replace("task.", ""))}
-              </strong>
-              <small>{workerEventLabel(event.payload)}</small>
+              <strong>Claude goal</strong>
+              <small>{goal.objective}</small>
             </span>
-            <time>{timeLabel(event.createdAt)}</time>
+            <em>{goal.status}</em>
           </div>
-        ))}
+        )}
+        {groups.length === 0 ? (
+          <p className="panel-task-pending">Waiting for Claude's first reported step…</p>
+        ) : (
+          groups.map((group) => (
+            <details className="panel-task-event" key={group.id}>
+              <summary>
+                <i className={`activity-status ${group.status}`} aria-hidden="true" />
+                <span>
+                  <strong>{group.label}</strong>
+                  <small>{group.detail}</small>
+                </span>
+                <time>{group.startedAt ? timeLabel(group.startedAt) : ""}</time>
+                <ChevronIcon className="chevron" />
+              </summary>
+              <div>
+                {group.details.map((detail) => (
+                  <p key={detail}>
+                    {group.path === detail ? (
+                      <button type="button" onClick={() => onOpenFile(detail)}>
+                        {detail}
+                      </button>
+                    ) : (
+                      detail
+                    )}
+                  </p>
+                ))}
+              </div>
+            </details>
+          ))
+        )}
         {task.summary && <p className="panel-task-summary">{task.summary}</p>}
         {task.error && <p className="panel-task-error">{task.error}</p>}
       </div>
@@ -2339,42 +2387,8 @@ function delegatedTaskFromValue(value: unknown): { id: string; objective: string
   return { id: value.id, objective: value.objective };
 }
 
-function workerEventLabel(payload: Record<string, unknown>): string {
-  const kind = typeof payload.kind === "string" ? payload.kind : "";
-  const tool = typeof payload.tool === "string" ? payload.tool : "";
-  if (kind === "subagent") {
-    const agent = typeof payload.agentType === "string" ? payload.agentType : "Claude";
-    return `Started ${agent} subagent`;
-  }
-  if (kind === "read") return "Read a file";
-  if (kind === "file") return tool === "Write" ? "Created a file" : "Edited a file";
-  if (kind === "search") return "Searched the workspace";
-  if (kind === "command") return "Ran a local command";
-  if (kind === "skill") return "Loaded a skill";
-  if (kind === "web") return "Searched the web";
-  if (kind === "task") return "Updated its task list";
-  if (typeof payload.detail === "string") return payload.detail;
-  if (tool) return `Used ${tool}`;
-  return "Claude reported progress";
-}
-
-function workerEventDetails(payload: Record<string, unknown>): string[] {
-  return [
-    typeof payload.detail === "string" ? payload.detail : "",
-    typeof payload.objective === "string" ? payload.objective : "",
-    typeof payload.path === "string" ? payload.path : "",
-    typeof payload.tool === "string" ? `Tool: ${payload.tool}` : "",
-  ].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index);
-}
-
 function claudeSubagentSummary(tasks: Task[]): string {
-  const count = new Set(
-    tasks.flatMap((task) =>
-      task.events
-        .filter((event) => event.payload.subagent === true)
-        .map((event) => `${task.id}:${String(event.payload.toolUseId ?? event.id)}`)
-    )
-  ).size;
+  const count = tasks.reduce((total, task) => total + workerSubagentCount(task), 0);
   return count > 0
     ? `${count} ${count === 1 ? "subagent" : "subagents"} reported`
     : "No subagents reported";

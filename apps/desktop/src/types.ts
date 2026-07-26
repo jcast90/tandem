@@ -303,4 +303,5 @@ export interface Activity {
   path?: string | undefined;
   details?: string[] | undefined;
   subagentIds?: string[] | undefined;
+  visibility?: "routine" | undefined;
 }

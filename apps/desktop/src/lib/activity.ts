@@ -232,10 +232,12 @@ export function upsertActivity(activities: Activity[], next: Activity): Activity
 }
 
 export function groupActivities(activities: Activity[]): ActivityGroup[] {
-  const ordered = [...activities].sort(
-    (left, right) =>
-      (left.startedAt ?? left.completedAt ?? 0) - (right.startedAt ?? right.completedAt ?? 0)
-  );
+  const ordered = activities
+    .filter(isVisibleActivity)
+    .sort(
+      (left, right) =>
+        (left.startedAt ?? left.completedAt ?? 0) - (right.startedAt ?? right.completedAt ?? 0)
+    );
   const groups: ActivityGroup[] = [];
 
   for (const activity of ordered) {
@@ -246,7 +248,7 @@ export function groupActivities(activities: Activity[]): ActivityGroup[] {
       previous.kind === activity.kind &&
       groupKey(previous.label, previous.kind) === groupKey(activity.label, activity.kind) &&
       activity.kind !== "subagent" &&
-      activity.kind !== "delegation" &&
+      !isAssignmentActivity(activity) &&
       activity.kind !== "plan";
 
     if (!canMerge) {
@@ -287,12 +289,23 @@ export function groupActivities(activities: Activity[]): ActivityGroup[] {
     if (activity.kind === "search")
       previous.label = `Checked the workspace ${previous.count} times`;
     if (activity.kind === "web") previous.label = `Ran ${previous.count} web searches`;
-    if (activity.kind === "file") previous.label = `Edited ${uniquePaths(previous.details)} files`;
+    if (activity.kind === "file") {
+      const pathCount = uniquePaths(previous.details);
+      previous.label =
+        pathCount === 1 ? `Edited 1 file · ${previous.count} changes` : `Edited ${pathCount} files`;
+    }
+    if (!["read", "search", "web", "file"].includes(activity.kind)) {
+      previous.label = repeatedLabel(previous.label, previous.count);
+    }
     previous.detail = activity.detail;
     previous.path = previous.count === 1 ? activity.path : undefined;
   }
 
   return groups;
+}
+
+export function isVisibleActivity(activity: Activity): boolean {
+  return activity.visibility !== "routine" || activity.status === "failed";
 }
 
 export function durationLabel(durationMs: number): string {
@@ -411,15 +424,17 @@ function toolActivity({
     };
   }
   if (lower.startsWith("tandem_task_")) {
+    const routine = lower.includes("wait");
     return {
       id,
       provider: "codex",
       kind: "delegation",
-      label: lower.includes("wait") ? "Checked Claude worker progress" : humanizeTool(tool),
+      label: routine ? "Checked Claude worker progress" : humanizeTool(tool),
       detail: argumentDetail || "Claude worker orchestration",
       status: failed ? "failed" : complete ? "completed" : "running",
       durationMs,
       details: compactDetails([argumentDetail]),
+      visibility: routine ? "routine" : undefined,
       ...timing,
     };
   }
@@ -486,17 +501,30 @@ function agentStateDetails(
 
 function groupKey(label: string, kind: ActivityKind): string {
   if (["read", "search", "web", "file"].includes(kind)) return kind;
-  return label.replace(/^(Using|Used|Editing|Edited|Viewing|Viewed)\s+/i, "").toLowerCase();
+  return label
+    .replace(/ · \d+ times$/i, "")
+    .replace(/^(Using|Used|Editing|Edited|Viewing|Viewed)\s+/i, "")
+    .toLowerCase();
+}
+
+function repeatedLabel(label: string, count: number): string {
+  return `${label.replace(/ · \d+ times$/i, "")} · ${count} times`;
+}
+
+function isAssignmentActivity(activity: Activity): boolean {
+  return activity.kind === "delegation" && /assign(?:ed|ing) work to claude/i.test(activity.label);
 }
 
 function uniquePaths(details: string[]): number {
-  return (
-    new Set(
-      details
-        .map((detail) => detail.match(/(?:add|delete|update):\s+(.+?)\s+\(/i)?.[1])
-        .filter((path): path is string => Boolean(path))
-    ).size || details.length
-  );
+  const paths = details.flatMap((detail) => {
+    const diffPath = detail.match(/(?:add|delete|update):\s+(.+?)\s+\(/i)?.[1];
+    if (diffPath) return [diffPath];
+    const toolPath = detail.match(/^[^:]+:\s+((?:\/|[A-Za-z]:\\).+)$/)?.[1];
+    if (toolPath) return [toolPath];
+    if (/^(?:\/|[A-Za-z]:\\)/.test(detail)) return [detail];
+    return [];
+  });
+  return new Set(paths).size || details.length;
 }
 
 function diffStats(diff: string): { additions: number; deletions: number } {

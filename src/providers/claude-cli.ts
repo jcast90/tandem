@@ -101,7 +101,7 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
         resultEvent = event;
         child.stdin.end();
       }
-      for (const activity of extractActivities(event)) {
+      for (const activity of extractClaudeActivities(event)) {
         hooks.onActivity("worker.activity", activity);
       }
     });
@@ -216,12 +216,47 @@ function parseReport(event: Record<string, unknown>): WorkerReport {
   throw new Error("Claude result did not contain a valid structured worker report.");
 }
 
-function extractActivities(event: Record<string, unknown>): Record<string, unknown>[] {
+export function extractClaudeActivities(event: Record<string, unknown>): Record<string, unknown>[] {
+  if (event.type === "system") {
+    const subtype = typeof event.subtype === "string" ? event.subtype : "";
+    const description =
+      typeof event.description === "string"
+        ? event.description
+        : typeof event.summary === "string"
+          ? event.summary
+          : "";
+    if (subtype === "task_started" || subtype === "task_notification") {
+      return [
+        {
+          kind: "task",
+          tool: "Task",
+          detail:
+            subtype === "task_started"
+              ? description || "Started a background task"
+              : `${description || "Background task"} · ${String(event.status ?? "updated")}`,
+          objective: description || undefined,
+          taskId: typeof event.task_id === "string" ? event.task_id : undefined,
+          subagent: false,
+        },
+      ];
+    }
+    return [];
+  }
   if (event.type !== "assistant" || !isObject(event.message)) return [];
   const content = event.message.content;
   if (!Array.isArray(content)) return [];
-  return content.flatMap((item) => {
-    if (!isObject(item) || item.type !== "tool_use" || typeof item.name !== "string") return [];
+  return content.flatMap<Record<string, unknown>>((item) => {
+    if (!isObject(item)) return [];
+    if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+      return [
+        {
+          kind: "progress",
+          detail: truncate(item.text, 180),
+          subagent: false,
+        },
+      ];
+    }
+    if (item.type !== "tool_use" || typeof item.name !== "string") return [];
     const metadata = describeToolUse(item.name, item.input);
     return [
       {
