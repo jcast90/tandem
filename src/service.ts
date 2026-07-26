@@ -5,6 +5,7 @@ import {
   TaskStatusSchema,
   WorkOrderSchema,
   type GoalRecord,
+  type GoalStatus,
   type TaskEvent,
   type TaskRecord,
   type TaskStatus,
@@ -34,13 +35,28 @@ export class TandemService {
     return this.store.listGoals(limit);
   }
 
+  updateGoalStatus(id: string, status: GoalStatus): GoalRecord {
+    if (!this.store.getGoal(id)) throw new Error(`Goal not found: ${id}`);
+    return this.store.updateGoalStatus(id, status);
+  }
+
   async delegate(input: unknown, projectRoot: string): Promise<TaskRecord> {
-    const workOrder = WorkOrderSchema.parse(input);
-    if (workOrder.goalId && !this.store.getGoal(workOrder.goalId)) {
+    let workOrder = WorkOrderSchema.parse(input);
+    const linkedGoal = workOrder.goalId ? this.store.getGoal(workOrder.goalId) : null;
+    if (workOrder.goalId && !linkedGoal) {
       throw new Error(`Goal not found: ${workOrder.goalId}`);
     }
     if (workOrder.parentTaskId && !this.store.getTask(workOrder.parentTaskId)) {
       throw new Error(`Parent task not found: ${workOrder.parentTaskId}`);
+    }
+    if (linkedGoal) {
+      workOrder = {
+        ...workOrder,
+        context: [
+          `Durable worker goal (${linkedGoal.id}): ${linkedGoal.objective}`,
+          ...workOrder.context.filter((item) => !item.startsWith("Durable worker goal (")),
+        ],
+      };
     }
 
     const config = await loadConfig();
@@ -125,6 +141,7 @@ export class TandemService {
       }
     }
     const canceled = this.store.updateTask(task.id, { status: "canceled" });
+    if (task.goalId) this.store.updateGoalStatus(task.goalId, "canceled");
     this.store.appendEvent(task.id, "task.canceled", { pid: task.pid });
     return canceled;
   }

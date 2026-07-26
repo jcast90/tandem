@@ -41,7 +41,7 @@ struct SubscriptionStatus {
     error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GoalView {
     id: String,
@@ -306,9 +306,51 @@ async fn desktop_tasks() -> Result<Vec<TaskView>, String> {
 }
 
 #[tauri::command]
+async fn desktop_goal_create(
+    objective: String,
+    parent_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<GoalView, String> {
+    run_blocking(move || {
+        let objective = objective.trim();
+        if objective.is_empty() {
+            return Err("Goal objective cannot be empty.".into());
+        }
+        let output = if let Some(parent_id) = parent_id.as_deref() {
+            run_tandem_command(&app, &["goal", "create", "--parent", parent_id, objective])?
+        } else {
+            run_tandem_command(&app, &["goal", "create", objective])?
+        };
+        serde_json::from_str(&output)
+            .map_err(|error| format!("Could not read created goal: {error}"))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn desktop_goal_update(
+    goal_id: String,
+    status: String,
+    app: tauri::AppHandle,
+) -> Result<GoalView, String> {
+    run_blocking(move || {
+        if !matches!(
+            status.as_str(),
+            "active" | "complete" | "blocked" | "canceled"
+        ) {
+            return Err(format!("Unsupported goal status: {status}"));
+        }
+        let output = run_tandem_command(&app, &["goal", "update", &goal_id, &status])?;
+        serde_json::from_str(&output)
+            .map_err(|error| format!("Could not read updated goal: {error}"))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn desktop_task_cancel(task_id: String, app: tauri::AppHandle) -> Result<TaskView, String> {
     run_blocking(move || {
-        run_tandem_task_command(&app, &["task", "cancel", &task_id])?;
+        run_tandem_command(&app, &["task", "cancel", &task_id])?;
         find_task(&task_id)
     })
     .await
@@ -324,7 +366,7 @@ async fn desktop_task_steer(
         if message.trim().is_empty() {
             return Err("Steering guidance cannot be empty.".into());
         }
-        run_tandem_task_command(&app, &["task", "steer", &task_id, message.trim()])?;
+        run_tandem_command(&app, &["task", "steer", &task_id, message.trim()])?;
         find_task(&task_id)
     })
     .await
@@ -631,7 +673,7 @@ where
         .map_err(|error| format!("Tandem background operation stopped unexpectedly: {error}"))?
 }
 
-fn run_tandem_task_command(app: &tauri::AppHandle, args: &[&str]) -> Result<(), String> {
+fn run_tandem_command(app: &tauri::AppHandle, args: &[&str]) -> Result<String, String> {
     let node = resolve_command("node").ok_or("Node.js was not found.")?;
     let (_, cli) = runtime_assets(app)?;
     if !cli.exists() {
@@ -643,16 +685,16 @@ fn run_tandem_task_command(app: &tauri::AppHandle, args: &[&str]) -> Result<(), 
         .env("PATH", command_path(&node))
         .env("TANDEM_HOME", tandem_home())
         .output()
-        .map_err(|error| format!("Could not run Tandem task action: {error}"))?;
+        .map_err(|error| format!("Could not run Tandem action: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if detail.is_empty() {
-            format!("Tandem task action failed with {}.", output.status)
+            format!("Tandem action failed with {}.", output.status)
         } else {
             detail
         });
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn find_task(task_id: &str) -> Result<TaskView, String> {
@@ -1146,6 +1188,8 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
+            desktop_goal_create,
+            desktop_goal_update,
             desktop_task_cancel,
             desktop_task_files,
             desktop_task_steer,

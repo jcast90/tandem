@@ -2,15 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronIcon, FileIcon } from "./Icons";
 import { durationLabel, groupActivities, timeLabel, type ActivityGroup } from "../lib/activity";
-import type { Activity, ChatMessage } from "../types";
+import type { Activity, ChatMessage, Goal } from "../types";
 
 export function WorkTrace({
   message,
   activities,
+  goals,
   onOpenFile,
 }: {
   message: ChatMessage;
   activities: Activity[];
+  goals: Goal[];
   onOpenFile: (path: string) => void;
 }) {
   const running = message.workStatus === "running";
@@ -86,16 +88,40 @@ export function WorkTrace({
               <span> · {message.routing.reason}</span>
             </small>
           )}
+          {goals[0] && (
+            <small className="work-goal-summary">
+              Goal · {goals[0].objective}
+              {goals.length > 1 ? ` · ${goals.length - 1} nested` : ""}
+            </small>
+          )}
         </span>
         <ChevronIcon className={expanded ? "chevron open" : "chevron"} />
       </button>
 
       {expanded && (
         <div className="work-trace-details">
+          {goals.length > 0 && (
+            <div className="work-goal-chain" aria-label="Goals for this work">
+              {goals.map((goal, index) => (
+                <div className={index === 0 ? "outer" : "nested"} key={goal.id}>
+                  <i className={`goal-status ${goal.status}`} aria-hidden="true" />
+                  <span>
+                    <strong>{index === 0 ? "Outer goal" : "Claude goal"}</strong>
+                    <small>{goal.objective}</small>
+                  </span>
+                  <em>{goal.status}</em>
+                </div>
+              ))}
+            </div>
+          )}
           {groups.length === 0 ? (
             <div className="work-trace-pending">
               <span />
-              <p>Waiting for the first reported action…</p>
+              <p>
+                {running
+                  ? "Waiting for the first reported action…"
+                  : "No tool activity was reported for this segment."}
+              </p>
             </div>
           ) : (
             groups.map((group) => (

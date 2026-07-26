@@ -39,8 +39,13 @@ orchestration core:
   Project rows also expose a one-click new-chat action, and chats can be archived
   or permanently deleted from their inline menu.
 - Codex delegation calls bind the resulting Claude task to the active chat.
+- Substantive turns create a durable outer goal. Claude-routed work also creates
+  a nested worker goal, carries that exact goal through delegation, and keeps
+  both lifecycle states synchronized with completion, blocking, and canceling.
 - Claude progress, blocked questions, final reports, verification, and isolated
   commit metadata appear inline while the outer turn continues.
+- Work is grouped into small chronological, collapsible segments between the
+  assistant updates that produced it instead of one turn-wide activity dump.
 - Assistant responses render Markdown, and local file links open a lightweight
   in-app preview with external-editor and Terminal shortcuts.
 - The active Codex turn and Claude workers can be stopped independently or
@@ -143,6 +148,7 @@ rewrite your global Codex configuration. The MCP server gives the outer agent
 these tools:
 
 - `tandem_goal_create`
+- `tandem_goal_update`
 - `tandem_goal_list`
 - `tandem_delegate`
 - `tandem_task_get`
@@ -177,7 +183,8 @@ tandem doctor
 tandem chat [--cd <repo>] [--model <model>] [initial prompt]
 tandem status
 tandem goal list
-tandem goal create <objective>
+tandem goal create [--parent <goal-id>] <objective>
+tandem goal update <goal-id> <active|complete|blocked|canceled>
 tandem task list [--status <status>]
 tandem task show <task-id>
 tandem task watch <task-id> [--once]

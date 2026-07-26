@@ -91,6 +91,11 @@ export interface RoutingDecision {
   reason: string;
 }
 
+export interface GoalHandoff {
+  outerGoalId: string;
+  workerGoalId?: string;
+}
+
 export interface ComposerAttachment {
   path: string;
   name: string;
@@ -265,6 +270,8 @@ export interface ChatMessage {
   completedAt?: number | null;
   durationMs?: number | null;
   routing?: RoutingDecision;
+  goalHandoff?: GoalHandoff;
+  activityIds?: string[];
   streaming?: boolean;
 }
 

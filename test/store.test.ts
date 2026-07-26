@@ -64,6 +64,7 @@ describe("TandemStore", () => {
       "worker.started",
     ]);
     expect(store.listGoals()[0]?.parentId).toBe(parent.id);
+    expect(store.updateGoalStatus(child.id, "complete").status).toBe("complete");
     store.close();
   });
 

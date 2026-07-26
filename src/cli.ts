@@ -6,7 +6,13 @@ import { resolve } from "node:path";
 
 import { DEFAULT_CONFIG, loadConfig, outerProfile, saveConfig, workerProfile } from "./config.js";
 import { createOuterAdapter, createWorkerAdapter } from "./providers/registry.js";
-import type { TandemConfig, TaskEvent, TaskRecord, TaskStatus } from "./protocol.js";
+import {
+  GoalStatusSchema,
+  type TandemConfig,
+  type TaskEvent,
+  type TaskRecord,
+  type TaskStatus,
+} from "./protocol.js";
 import { findExecutable, runCommand, truncate } from "./process.js";
 import { resolveCmuxBinary, selectRuntime } from "./runtime.js";
 import { TandemService } from "./service.js";
@@ -254,9 +260,24 @@ async function goalCommand(rawArgs: string[]): Promise<void> {
       return;
     }
     if (subcommand === "create") {
-      const objective = rawArgs.join(" ").trim();
-      if (!objective) throw new Error("Usage: tandem goal create <objective>");
-      const goal = service.createGoal(objective);
+      const parentIndex = rawArgs.indexOf("--parent");
+      const parentId =
+        parentIndex >= 0 ? requireArg(rawArgs, parentIndex + 1, "parent goal id") : null;
+      const objective = rawArgs
+        .filter(
+          (_, index) => parentIndex < 0 || (index !== parentIndex && index !== parentIndex + 1)
+        )
+        .join(" ")
+        .trim();
+      if (!objective) throw new Error("Usage: tandem goal create [--parent <goal-id>] <objective>");
+      const goal = service.createGoal(objective, parentId);
+      console.log(JSON.stringify(goal, null, 2));
+      return;
+    }
+    if (subcommand === "update") {
+      const goalId = requireArg(rawArgs, 0, "goal id");
+      const status = GoalStatusSchema.parse(requireArg(rawArgs, 1, "goal status"));
+      const goal = service.updateGoalStatus(goalId, status);
       console.log(JSON.stringify(goal, null, 2));
       return;
     }
@@ -397,7 +418,8 @@ Usage:
   tandem chat [--cd <repo>] [--model <model>] [initial prompt]
   tandem status
   tandem goal list
-  tandem goal create <objective>
+  tandem goal create [--parent <goal-id>] <objective>
+  tandem goal update <goal-id> <active|complete|blocked|canceled>
   tandem task list [--status <status>]
   tandem task show <task-id>
   tandem task watch <task-id> [--once]

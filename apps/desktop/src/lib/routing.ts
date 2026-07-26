@@ -1,4 +1,4 @@
-import type { ComposerAttachment, ProviderRoute, RoutingDecision } from "../types.js";
+import type { ComposerAttachment, GoalHandoff, ProviderRoute, RoutingDecision } from "../types.js";
 
 interface RoutingInput {
   text: string;
@@ -107,10 +107,16 @@ export function routingPrompt(
   text: string,
   decision: RoutingDecision,
   claudeModel: string,
-  workerPermission: string
+  workerPermission: string,
+  goalHandoff?: GoalHandoff
 ): string {
-  const instruction = routingInstruction(decision, claudeModel, workerPermission);
-  return `${text}\n\n<tandem-routing>\nmode=${decision.mode}\nprovider=${decision.provider}\nreason=${decision.reason}\n${instruction}\n</tandem-routing>`;
+  const instruction = routingInstruction(decision, claudeModel, workerPermission, goalHandoff);
+  const goals = goalHandoff
+    ? `\nouter_goal_id=${goalHandoff.outerGoalId}${
+        goalHandoff.workerGoalId ? `\nworker_goal_id=${goalHandoff.workerGoalId}` : ""
+      }`
+    : "";
+  return `${text}\n\n<tandem-routing>\nmode=${decision.mode}\nprovider=${decision.provider}\nreason=${decision.reason}${goals}\n${instruction}\n</tandem-routing>`;
 }
 
 export function routingDecisionFromText(text: string): RoutingDecision | null {
@@ -149,20 +155,66 @@ export function conversationRoutingContext(
     .slice(-4);
 }
 
+export function goalDepthForRequest(
+  decision: RoutingDecision,
+  input: RoutingInput
+): "none" | "outer" | "nested" {
+  if (decision.provider === "claude") return "nested";
+  const current = normalize(input.text);
+  const wordCount = current.split(/\s+/).filter(Boolean).length;
+  const ambiguous = wordCount <= 18 && AMBIGUOUS_FOLLOW_UP.test(current);
+  const recent = (input.recentMessages ?? []).slice(-4).join(" ");
+  const context = normalize(ambiguous ? `${current} ${recent}` : current);
+  if (hasMatch(current, TINY_SCOPE)) return "none";
+  const substantial =
+    hasMatch(context, LARGE_SCOPE) ||
+    countMatches(context, IMPLEMENTATION_PATTERNS) > 0 ||
+    countMatches(context, DISCOVERY_PATTERNS) >= 2 ||
+    /\b(goal|milestone|multi[- ]step|keep (?:working|pursuing)|follow through)\b/.test(context);
+  return substantial ? "outer" : "none";
+}
+
+export function goalHandoffFromText(text: string): GoalHandoff | null {
+  const block = text.match(/<tandem-routing>([\s\S]*?)<\/tandem-routing>/)?.[1];
+  if (!block) return null;
+  const outerGoalId = metadataValue(block, "outer_goal_id");
+  if (!outerGoalId) return null;
+  const workerGoalId = metadataValue(block, "worker_goal_id");
+  return {
+    outerGoalId,
+    ...(workerGoalId ? { workerGoalId } : {}),
+  };
+}
+
+export function conciseGoalObjective(text: string, prefix = ""): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const objective = clean.length > 180 ? `${clean.slice(0, 177).trimEnd()}…` : clean;
+  return `${prefix}${objective}`;
+}
+
 function routingInstruction(
   decision: RoutingDecision,
   claudeModel: string,
-  workerPermission: string
+  workerPermission: string,
+  goalHandoff?: GoalHandoff
 ): string {
   if (decision.provider === "claude") {
-    return `This routing decision is authoritative. Codex remains the outer planner and reviewer. Do not edit files or run implementation commands yourself. Perform only the minimal read-only inspection needed to define a bounded work order, then call tandem_delegate, wait for the worker, and review its result. Pass permission_mode="${workerPermission}"${
+    return `This routing decision is authoritative. Codex remains the outer planner and reviewer. The durable outer goal is ${goalHandoff?.outerGoalId ?? "not set"} and the Claude worker goal is ${goalHandoff?.workerGoalId ?? "not set"}. Do not edit files or run implementation commands yourself. Perform only the minimal read-only inspection needed to define a bounded work order, then call tandem_delegate with goal_id="${goalHandoff?.workerGoalId ?? ""}", wait for the worker, and review its result. Pass permission_mode="${workerPermission}"${
       claudeModel ? ` and model="${claudeModel}"` : ""
     } to tandem_delegate.`;
   }
   if (decision.mode === "codex") {
-    return "Handle this request with Codex only. Do not call tandem_delegate.";
+    return `Handle this request with Codex only. The durable outer goal is ${goalHandoff?.outerGoalId ?? "not set"}. Do not call tandem_delegate.`;
   }
-  return "Handle this discussion, research, planning, review, or lightweight work with Codex. If the request materially becomes substantive implementation or long-running execution, delegate that bounded portion through tandem_delegate instead of implementing it yourself.";
+  return `Handle this discussion, research, planning, review, or lightweight work with Codex. The durable outer goal is ${goalHandoff?.outerGoalId ?? "not set"}. If the request materially becomes substantive implementation or long-running execution, create a child goal under that outer goal and delegate the bounded portion through tandem_delegate instead of implementing it yourself.`;
+}
+
+function metadataValue(block: string, key: string): string | null {
+  const line = block
+    .split("\n")
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(`${key}=`));
+  return line ? line.slice(key.length + 1).trim() || null : null;
 }
 
 function routingReason(text: string): string {

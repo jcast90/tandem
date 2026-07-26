@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyAutoRoute,
+  conciseGoalObjective,
+  goalDepthForRequest,
+  goalHandoffFromText,
   resolveRoute,
   routingDecisionFromText,
   routingPrompt,
@@ -68,11 +71,39 @@ describe("desktop adaptive routing", () => {
 
   it("round-trips a hidden routing decision and requires Claude delegation", () => {
     const decision = resolveRoute("auto", { text: "Build the feature and test it" });
-    const prompt = routingPrompt("Build the feature and test it", decision, "opus", "acceptEdits");
+    const prompt = routingPrompt("Build the feature and test it", decision, "opus", "acceptEdits", {
+      outerGoalId: "outer-1",
+      workerGoalId: "worker-1",
+    });
 
     expect(prompt).toContain("Do not edit files or run implementation commands yourself");
     expect(prompt).toContain("call tandem_delegate");
     expect(prompt).toContain('model="opus"');
+    expect(prompt).toContain('goal_id="worker-1"');
     expect(routingDecisionFromText(prompt)).toEqual(decision);
+    expect(goalHandoffFromText(prompt)).toEqual({
+      outerGoalId: "outer-1",
+      workerGoalId: "worker-1",
+    });
+  });
+
+  it("creates nested goals for Claude and outer goals for substantial Codex work", () => {
+    expect(
+      goalDepthForRequest(resolveRoute("auto", { text: "Implement the full flow" }), {
+        text: "Implement the full flow",
+      })
+    ).toBe("nested");
+    expect(
+      goalDepthForRequest(resolveRoute("codex", { text: "Audit and recommend a migration plan" }), {
+        text: "Audit and recommend a migration plan",
+      })
+    ).toBe("outer");
+    expect(goalDepthForRequest(resolveRoute("auto", { text: "Hello" }), { text: "Hello" })).toBe(
+      "none"
+    );
+  });
+
+  it("keeps generated goal objectives concise", () => {
+    expect(conciseGoalObjective("  Build   the flow  ", "Claude: ")).toBe("Claude: Build the flow");
   });
 });

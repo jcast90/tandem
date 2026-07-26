@@ -1103,7 +1103,7 @@ textarea:focus-visible {
 
 .work-trace {
   width: min(100% - 37px, 700px);
-  margin: -6px 0 26px 37px;
+  margin: -2px 0 18px 37px;
   border-top: 1px solid var(--line-soft);
   border-bottom: 1px solid var(--line-soft);
 }
@@ -1169,6 +1169,10 @@ textarea:focus-visible {
   color: var(--faint);
 }
 
+.work-trace-summary .work-goal-summary {
+  color: var(--muted);
+}
+
 .work-trace-summary .chevron {
   width: 15px;
   color: var(--faint);
@@ -1176,6 +1180,68 @@ textarea:focus-visible {
 
 .work-trace-details {
   padding: 0 0 8px 20px;
+}
+
+.work-goal-chain {
+  display: grid;
+  padding: 4px 2px 9px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.work-goal-chain > div {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.work-goal-chain > div.nested {
+  margin-left: 18px;
+}
+
+.work-goal-chain .goal-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.work-goal-chain .goal-status.complete {
+  background: var(--success);
+}
+
+.work-goal-chain .goal-status.blocked,
+.work-goal-chain .goal-status.canceled {
+  background: var(--danger);
+}
+
+.work-goal-chain span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-goal-chain strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 580;
+}
+
+.work-goal-chain small {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-goal-chain em {
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  text-transform: capitalize;
 }
 
 .work-step {

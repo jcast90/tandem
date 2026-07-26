@@ -33,6 +33,7 @@ describe("Tandem MCP server", () => {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
         "tandem_goal_create",
+        "tandem_goal_update",
         "tandem_goal_list",
         "tandem_delegate",
         "tandem_task_get",

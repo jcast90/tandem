@@ -19,6 +19,7 @@ import { MarkdownMessage } from "./components/MarkdownMessage";
 import { SettingsView } from "./components/SettingsView";
 import { WorkTrace } from "./components/WorkTrace";
 import {
+  activityFromItem,
   activitiesFromThread,
   durationLabel,
   groupActivities,
@@ -27,11 +28,22 @@ import {
 } from "./lib/activity";
 import { CodexConnection } from "./lib/codex";
 import {
+  conciseGoalObjective,
   conversationRoutingContext,
+  goalDepthForRequest,
+  goalHandoffFromText,
   resolveRoute,
   routingDecisionFromText,
   routingPrompt,
 } from "./lib/routing";
+import {
+  activitiesForMessage,
+  attachActivityToTimeline,
+  closeOpenWorkSegment,
+  completeWorkSegments,
+  startWorkSegment,
+  type WorkMetadata,
+} from "./lib/timeline";
 import type {
   Activity,
   Bootstrap,
@@ -41,6 +53,8 @@ import type {
   CodexThread,
   ComposerAttachment,
   FilePreview,
+  Goal,
+  GoalHandoff,
   PermissionMode,
   PluginOption,
   ProviderRoute,
@@ -126,6 +140,7 @@ export function App() {
   const submissionEpochRef = useRef(0);
   const allowTurnEventsRef = useRef(false);
   const activeTurnRef = useRef("");
+  const turnMetadataRef = useRef(new Map<string, WorkMetadata>());
 
   const refreshBootstrap = useCallback(async () => {
     const next = await invoke<Bootstrap>("desktop_bootstrap");
@@ -155,11 +170,22 @@ export function App() {
       });
       const connection = new CodexConnection(endpoint, {
         onDelta: (itemId, delta) => {
-          setMessages((current) => appendAssistantDelta(current, itemId, delta));
+          setMessages((current) =>
+            appendAssistantDelta(
+              closeOpenWorkSegment(current, activeTurnRef.current, Date.now()),
+              itemId,
+              delta
+            )
+          );
         },
         onItem: (item, complete) => {
           if (item.type === "agentMessage" && complete) {
-            setMessages((current) => completeAssistantMessage(current, item));
+            setMessages((current) =>
+              completeAssistantMessage(
+                closeOpenWorkSegment(current, activeTurnRef.current, Date.now()),
+                item
+              )
+            );
           }
           if (item.type === "mcpToolCall" && complete) {
             const delegated = delegatedTaskFromItem(item);
@@ -174,10 +200,21 @@ export function App() {
           activeTurnRef.current = turnId;
           setActiveTurnId(turnId);
           setGenerating(true);
-          setMessages((current) => startWorkMessage(current, turnId, Date.now()));
+          setMessages((current) =>
+            startWorkSegment(current, turnId, Date.now(), turnMetadataRef.current.get(turnId))
+          );
         },
         onTurnComplete: (turnId, status) => {
-          setMessages((current) => completeWorkMessage(current, turnId, status, Date.now()));
+          setMessages((current) =>
+            completeWorkSegments(current, turnId, workStatus(status), Date.now())
+          );
+          const goalHandoff = turnMetadataRef.current.get(turnId)?.goalHandoff;
+          if (goalHandoff) {
+            void syncGoalHandoff(goalHandoff, status, refreshBootstrap).catch((error) =>
+              setNotice(error instanceof Error ? error.message : String(error))
+            );
+          }
+          turnMetadataRef.current.delete(turnId);
           if (activeTurnRef.current === turnId) {
             activeTurnRef.current = "";
             allowTurnEventsRef.current = false;
@@ -194,6 +231,13 @@ export function App() {
         },
         onActivity: (activity) => {
           setActivities((current) => upsertActivity(current, activity));
+          setMessages((current) =>
+            attachActivityToTimeline(
+              current,
+              activity,
+              activity.turnId ? turnMetadataRef.current.get(activity.turnId) : undefined
+            )
+          );
         },
         onError: (message) => setNotice(message),
       });
@@ -345,6 +389,10 @@ export function App() {
   const taskById = useMemo(
     () => new Map(bootstrap.tasks.map((task) => [task.id, task])),
     [bootstrap.tasks]
+  );
+  const goalById = useMemo(
+    () => new Map(bootstrap.goals.map((goal) => [goal.id, goal])),
+    [bootstrap.goals]
   );
   const selectedCodexModel = useMemo(
     () => models.find((model) => model.model === codexModel || model.id === codexModel),
@@ -587,12 +635,11 @@ export function App() {
       recentMessages: conversationRoutingContext(messages),
       attachments,
     });
-    const routedText = routingPrompt(
+    const routingInput = {
       text,
-      routing,
-      claudeModel,
-      claudePermissionMode(permissionMode)
-    );
+      recentMessages: conversationRoutingContext(messages),
+      attachments,
+    };
     const turnOptions = {
       model: codexModel || null,
       effort: codexEffort || null,
@@ -600,8 +647,16 @@ export function App() {
       attachments,
     };
     let submissionEpoch: number | null = null;
+    let goalHandoff: GoalHandoff | undefined;
     try {
       if (generating && activeThread && activeTurnId) {
+        const routedText = routingPrompt(
+          text,
+          routing,
+          claudeModel,
+          claudePermissionMode(permissionMode),
+          turnMetadataRef.current.get(activeTurnId)?.goalHandoff
+        );
         await connection.steerTurn(
           activeThread.id,
           activeTurnId,
@@ -619,11 +674,31 @@ export function App() {
         setNotice("Guidance added to the active Codex turn.");
         return;
       }
+      const goalDepth = goalDepthForRequest(routing, routingInput);
+      if (goalDepth !== "none") {
+        const created = await createDurableGoals(text, goalDepth);
+        goalHandoff = created.handoff;
+        setBootstrap((current) => ({
+          ...current,
+          goals: [...created.goals, ...current.goals],
+        }));
+      }
+      const metadata: WorkMetadata = {
+        routing,
+        ...(goalHandoff ? { goalHandoff } : {}),
+      };
+      const routedText = routingPrompt(
+        text,
+        routing,
+        claudeModel,
+        claudePermissionMode(permissionMode),
+        goalHandoff
+      );
       submissionEpoch = ++submissionEpochRef.current;
       allowTurnEventsRef.current = true;
       setGenerating(true);
       setMessages((current) =>
-        startWorkMessage(current, `pending-${submissionEpoch}`, Date.now(), routing)
+        startWorkSegment(current, `pending-${submissionEpoch}`, Date.now(), metadata)
       );
       let thread = activeThread;
       if (!thread) {
@@ -646,8 +721,9 @@ export function App() {
       setAttachments([]);
       setComposerMenu(null);
       activeTurnRef.current = turnId;
+      turnMetadataRef.current.set(turnId, metadata);
       setActiveTurnId(turnId);
-      setMessages((current) => startWorkMessage(current, turnId, Date.now(), routing));
+      setMessages((current) => startWorkSegment(current, turnId, Date.now(), metadata));
       setActivities((current) =>
         addSkillActivities(current, selectedSkills, turnId, "Attached to this turn")
       );
@@ -656,6 +732,9 @@ export function App() {
       allowTurnEventsRef.current = false;
       setGenerating(false);
       setMessages((current) => completeLatestWorkMessage(current, "failed", Date.now()));
+      if (goalHandoff) {
+        void cancelGoalHandoff(goalHandoff, refreshBootstrap).catch(() => undefined);
+      }
       setNotice(error instanceof Error ? error.message : String(error));
     }
   };
@@ -670,7 +749,13 @@ export function App() {
     activeTurnRef.current = "";
     setActiveTurnId("");
     setGenerating(false);
-    setMessages((current) => completeLatestWorkMessage(current, "interrupted", Date.now()));
+    setMessages((current) =>
+      turnId
+        ? completeWorkSegments(current, turnId, "interrupted", Date.now())
+        : completeLatestWorkMessage(current, "interrupted", Date.now())
+    );
+    const goalHandoff = turnId ? turnMetadataRef.current.get(turnId)?.goalHandoff : undefined;
+    if (turnId) turnMetadataRef.current.delete(turnId);
     setNotice("Stopping active work…");
     try {
       const actions: Promise<unknown>[] = projectActiveTasks.map((task) =>
@@ -680,6 +765,7 @@ export function App() {
         actions.push(connection.interruptTurn(threadId, turnId));
       }
       await Promise.allSettled(actions);
+      if (goalHandoff) await cancelGoalHandoff(goalHandoff, refreshBootstrap);
       await refreshTasks();
       setNotice("Stopped active work in this project.");
     } catch (error) {
@@ -965,7 +1051,11 @@ export function App() {
                       <WorkTrace
                         key={message.id}
                         message={message}
-                        activities={activitiesByTurn.get(message.turnId) ?? []}
+                        activities={activitiesForMessage(
+                          message,
+                          activitiesByTurn.get(message.turnId) ?? []
+                        )}
+                        goals={goalsForHandoff(message.goalHandoff, goalById)}
                         onOpenFile={(path) => void inspectFile(path)}
                       />
                     ) : message.role === "worker" && message.taskId ? (
@@ -1912,6 +2002,104 @@ function claudePermissionMode(mode: PermissionMode): string {
   return "acceptEdits";
 }
 
+async function createDurableGoals(
+  text: string,
+  depth: "outer" | "nested"
+): Promise<{ handoff: GoalHandoff; goals: Goal[] }> {
+  const outer = await invoke<Goal>("desktop_goal_create", {
+    objective: conciseGoalObjective(text),
+    parentId: null,
+  });
+  if (depth === "outer") {
+    return { handoff: { outerGoalId: outer.id }, goals: [outer] };
+  }
+  try {
+    const worker = await invoke<Goal>("desktop_goal_create", {
+      objective: conciseGoalObjective(text, "Execute with Claude: "),
+      parentId: outer.id,
+    });
+    return {
+      handoff: { outerGoalId: outer.id, workerGoalId: worker.id },
+      goals: [outer, worker],
+    };
+  } catch (error) {
+    await invoke("desktop_goal_update", { goalId: outer.id, status: "canceled" }).catch(
+      () => undefined
+    );
+    throw error;
+  }
+}
+
+async function syncGoalHandoff(
+  handoff: GoalHandoff,
+  turnStatus: string,
+  refreshBootstrap: () => Promise<Bootstrap>
+): Promise<void> {
+  const normalized = turnStatus.toLowerCase();
+  if (normalized.includes("interrupt") || normalized.includes("cancel")) {
+    await updateGoalChain(handoff, "canceled");
+    await refreshBootstrap();
+    return;
+  }
+  if (normalized.includes("fail") || normalized.includes("error")) {
+    await updateGoalChain(handoff, "blocked");
+    await refreshBootstrap();
+    return;
+  }
+
+  if (!handoff.workerGoalId) {
+    await updateGoal(handoff.outerGoalId, "complete");
+    await refreshBootstrap();
+    return;
+  }
+
+  const tasks = await invoke<Task[]>("desktop_tasks");
+  const workerTask = tasks.find((task) => task.goalId === handoff.workerGoalId);
+  if (!workerTask) {
+    await updateGoal(handoff.workerGoalId, "blocked");
+    await updateGoal(handoff.outerGoalId, "blocked");
+  } else if (workerTask.status === "completed") {
+    await updateGoal(handoff.workerGoalId, "complete");
+    await updateGoal(handoff.outerGoalId, "complete");
+  } else if (workerTask.status === "canceled") {
+    await updateGoalChain(handoff, "canceled");
+  } else if (workerTask.status === "blocked" || workerTask.status === "failed") {
+    await updateGoalChain(handoff, "blocked");
+  }
+  await refreshBootstrap();
+}
+
+async function cancelGoalHandoff(
+  handoff: GoalHandoff,
+  refreshBootstrap: () => Promise<Bootstrap>
+): Promise<void> {
+  await updateGoalChain(handoff, "canceled");
+  await refreshBootstrap();
+}
+
+async function updateGoalChain(
+  handoff: GoalHandoff,
+  status: "complete" | "blocked" | "canceled"
+): Promise<void> {
+  if (handoff.workerGoalId) await updateGoal(handoff.workerGoalId, status);
+  await updateGoal(handoff.outerGoalId, status);
+}
+
+async function updateGoal(
+  goalId: string,
+  status: "complete" | "blocked" | "canceled"
+): Promise<void> {
+  await invoke("desktop_goal_update", { goalId, status });
+}
+
+function goalsForHandoff(handoff: GoalHandoff | undefined, goals: Map<string, Goal>): Goal[] {
+  if (!handoff) return [];
+  return [
+    goals.get(handoff.outerGoalId),
+    handoff.workerGoalId ? goals.get(handoff.workerGoalId) : undefined,
+  ].filter((goal): goal is Goal => Boolean(goal));
+}
+
 function visibleUserText(text: string): string {
   return text.replace(/\n*\n*<tandem-routing>[\s\S]*?<\/tandem-routing>/g, "").trim();
 }
@@ -1938,10 +2126,13 @@ function uniqueProjects(projects: Project[]): Project[] {
 }
 
 function messagesFromThread(thread: CodexThread): ChatMessage[] {
-  const messages: ChatMessage[] = [];
+  let messages: ChatMessage[] = [];
   for (const turn of thread.turns ?? []) {
     const items = turn.items ?? [];
     let routing: RoutingDecision | null = null;
+    let goalHandoff: GoalHandoff | null = null;
+    const startedAt = turn.startedAt ? turn.startedAt * 1000 : thread.updatedAt * 1000;
+    const completedAt = turn.completedAt ? turn.completedAt * 1000 : thread.updatedAt * 1000;
     for (const item of items) {
       if (item.type === "userMessage") {
         const text =
@@ -1953,33 +2144,33 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
             : "";
         if (text) {
           routing = routingDecisionFromText(text);
+          goalHandoff = goalHandoffFromText(text);
           messages.push({ id: item.id, role: "user", text: visibleUserText(text) });
+          if (goalHandoff) {
+            messages = startWorkSegment(messages, turn.id, startedAt, {
+              ...(routing ? { routing } : {}),
+              goalHandoff,
+            });
+          }
         }
+        continue;
       }
-    }
-
-    const hasWork = items.some((item) => item.type !== "userMessage");
-    if (hasWork) {
-      messages.push({
-        id: `work-${turn.id}`,
-        role: "work",
-        text: "",
-        turnId: turn.id,
-        workStatus: workStatus(turn.status),
-        startedAt: turn.startedAt ? turn.startedAt * 1000 : null,
-        completedAt: turn.completedAt ? turn.completedAt * 1000 : null,
-        durationMs: turn.durationMs ?? null,
-        ...(routing ? { routing } : {}),
-      });
-    }
-
-    for (const item of items) {
       if (item.type === "agentMessage" && "text" in item && item.text) {
+        messages = closeOpenWorkSegment(messages, turn.id, completedAt);
         messages.push({ id: item.id, role: "assistant", text: item.text });
+        continue;
+      }
+      const activity = activityFromItem(item, true, turn.id, completedAt);
+      if (activity) {
+        messages = attachActivityToTimeline(messages, activity, {
+          ...(routing ? { routing } : {}),
+          ...(goalHandoff ? { goalHandoff } : {}),
+        });
       }
       if (item.type === "mcpToolCall") {
         const delegated = delegatedTaskFromItem(item);
         if (delegated) {
+          messages = closeOpenWorkSegment(messages, turn.id, completedAt);
           messages.push({
             id: `worker-${item.id}`,
             role: "worker",
@@ -1989,6 +2180,7 @@ function messagesFromThread(thread: CodexThread): ChatMessage[] {
         }
       }
     }
+    messages = completeWorkSegments(messages, turn.id, workStatus(turn.status), completedAt);
   }
   return messages;
 }
@@ -2087,78 +2279,6 @@ function claudeSubagentSummary(tasks: Task[]): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function startWorkMessage(
-  messages: ChatMessage[],
-  turnId: string,
-  startedAt: number,
-  routing?: ChatMessage["routing"]
-): ChatMessage[] {
-  const existing = messages.findIndex(
-    (message) => message.role === "work" && message.turnId === turnId
-  );
-  if (existing >= 0) {
-    return routing
-      ? messages.map((message, index) =>
-          index === existing && !message.routing ? { ...message, routing } : message
-        )
-      : messages;
-  }
-
-  const pending = messages.findLastIndex(
-    (message) =>
-      message.role === "work" &&
-      message.workStatus === "running" &&
-      message.turnId?.startsWith("pending-")
-  );
-  if (pending >= 0) {
-    return messages.map((message, index) =>
-      index === pending
-        ? {
-            ...message,
-            id: `work-${turnId}`,
-            turnId,
-            startedAt: message.startedAt ?? startedAt,
-            ...(routing ? { routing } : {}),
-          }
-        : message
-    );
-  }
-
-  return [
-    ...messages,
-    {
-      id: `work-${turnId}`,
-      role: "work",
-      text: "",
-      turnId,
-      workStatus: "running",
-      startedAt,
-      ...(routing ? { routing } : {}),
-    },
-  ];
-}
-
-function completeWorkMessage(
-  messages: ChatMessage[],
-  turnId: string,
-  status: string,
-  completedAt: number
-): ChatMessage[] {
-  const index = messages.findIndex(
-    (message) => message.role === "work" && message.turnId === turnId
-  );
-  if (index < 0) return completeLatestWorkMessage(messages, workStatus(status), completedAt);
-  return messages.map((message, messageIndex) => {
-    if (messageIndex !== index) return message;
-    return {
-      ...message,
-      workStatus: workStatus(status),
-      completedAt,
-      durationMs: Math.max(0, completedAt - (message.startedAt ?? completedAt)),
-    };
-  });
 }
 
 function completeLatestWorkMessage(

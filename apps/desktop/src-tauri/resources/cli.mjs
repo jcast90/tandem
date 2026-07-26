@@ -4425,12 +4425,16 @@ function streamingUserMessage(text) {
 `;
 }
 function buildWorkerPrompt(task) {
+  const durableGoal = task.context.find((item) => item.startsWith("Durable worker goal ("));
   const acceptance = task.acceptanceCriteria.length > 0 ? task.acceptanceCriteria.map((item, index) => `${index + 1}. ${item}`).join("\n") : "No explicit criteria were supplied. Infer conservative, testable criteria from the objective.";
-  const context = task.context.length > 0 ? task.context.map((item) => `- ${item}`).join("\n") : "- Inspect the repository and its local instructions.";
+  const context = task.context.filter((item) => item !== durableGoal).length > 0 ? task.context.filter((item) => item !== durableGoal).map((item) => `- ${item}`).join("\n") : "- Inspect the repository and its local instructions.";
   return `You are Tandem's bounded execution worker.
 
 Objective:
 ${task.objective}
+
+Goal handoff:
+${durableGoal ?? "No durable worker goal was attached."}
 
 Acceptance criteria:
 ${acceptance}
@@ -4445,6 +4449,7 @@ Operating contract:
 - Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps and will commit after your report.
 - If the work order asks for a commit, interpret that as leaving the requested changes ready for Tandem to commit. Do not run git commit yourself.
 - Do not broaden the objective. If a material product decision or missing authority blocks safe execution, stop and report status "blocked" with concise questions.
+- Treat the durable worker goal as the outcome you own. Your terminal report determines whether Tandem completes or blocks that goal and its parent.
 - Report concrete evidence and the exact tests or checks run.
 - Your final response must satisfy the supplied JSON schema.`;
 }
@@ -5068,13 +5073,27 @@ var TandemService = class {
   listGoals(limit = 50) {
     return this.store.listGoals(limit);
   }
+  updateGoalStatus(id, status2) {
+    if (!this.store.getGoal(id)) throw new Error(`Goal not found: ${id}`);
+    return this.store.updateGoalStatus(id, status2);
+  }
   async delegate(input2, projectRoot) {
-    const workOrder = WorkOrderSchema.parse(input2);
-    if (workOrder.goalId && !this.store.getGoal(workOrder.goalId)) {
+    let workOrder = WorkOrderSchema.parse(input2);
+    const linkedGoal = workOrder.goalId ? this.store.getGoal(workOrder.goalId) : null;
+    if (workOrder.goalId && !linkedGoal) {
       throw new Error(`Goal not found: ${workOrder.goalId}`);
     }
     if (workOrder.parentTaskId && !this.store.getTask(workOrder.parentTaskId)) {
       throw new Error(`Parent task not found: ${workOrder.parentTaskId}`);
+    }
+    if (linkedGoal) {
+      workOrder = {
+        ...workOrder,
+        context: [
+          `Durable worker goal (${linkedGoal.id}): ${linkedGoal.objective}`,
+          ...workOrder.context.filter((item) => !item.startsWith("Durable worker goal ("))
+        ]
+      };
     }
     const config = await loadConfig();
     const profile = workerProfile(config, workOrder.profileId);
@@ -5146,6 +5165,7 @@ var TandemService = class {
       }
     }
     const canceled = this.store.updateTask(task.id, { status: "canceled" });
+    if (task.goalId) this.store.updateGoalStatus(task.goalId, "canceled");
     this.store.appendEvent(task.id, "task.canceled", { pid: task.pid });
     return canceled;
   }
@@ -5233,6 +5253,7 @@ async function runWorker(taskId) {
       const current = store.getTask(task.id);
       if (current && !["completed", "failed", "canceled"].includes(current.status)) {
         store.updateTask(task.id, { status: "canceled" });
+        updateLinkedGoal(store, task.goalId, "canceled");
         store.appendEvent(task.id, "worker.canceled", { signal: "SIGTERM" });
       }
     } finally {
@@ -5247,6 +5268,7 @@ async function runWorker(taskId) {
       pid: process.pid,
       error: null
     });
+    updateLinkedGoal(store, task.goalId, "active");
     store.appendEvent(task.id, "worker.started", {
       pid: process.pid,
       provider: profile.provider,
@@ -5271,6 +5293,7 @@ async function runWorker(taskId) {
         summary: result.report.summary,
         report: result.report
       });
+      updateLinkedGoal(store, task.goalId, "complete");
       store.appendEvent(task.id, "worker.completed", {
         commitSha,
         summary: result.report.summary
@@ -5287,6 +5310,7 @@ async function runWorker(taskId) {
       report: result.report,
       error: result.report.blockers.join("\n") || null
     });
+    updateLinkedGoal(store, task.goalId, "blocked");
     store.appendEvent(task.id, `worker.${status2}`, {
       summary: result.report.summary,
       blockers: result.report.blockers,
@@ -5299,6 +5323,7 @@ async function runWorker(taskId) {
     if (interrupted) return 130;
     const message = error instanceof Error ? error.message : String(error);
     store.updateTask(task.id, { status: "failed", error: message });
+    updateLinkedGoal(store, task.goalId, "blocked");
     store.appendEvent(task.id, "worker.failed", { error: message });
     await updateCmux("failed", 1);
     await notifyCmux("Tandem worker failed", message);
@@ -5310,6 +5335,10 @@ async function runWorker(taskId) {
     process.removeListener("SIGINT", cancel);
     store.close();
   }
+}
+function updateLinkedGoal(store, goalId, status2) {
+  if (!goalId || !store.getGoal(goalId)) return;
+  store.updateGoalStatus(goalId, status2);
 }
 async function updateCmux(status2, progress) {
   const cmux = resolveCmuxBinary();
@@ -5553,9 +5582,20 @@ async function goalCommand(rawArgs) {
       return;
     }
     if (subcommand === "create") {
-      const objective = rawArgs.join(" ").trim();
-      if (!objective) throw new Error("Usage: tandem goal create <objective>");
-      const goal = service.createGoal(objective);
+      const parentIndex = rawArgs.indexOf("--parent");
+      const parentId = parentIndex >= 0 ? requireArg(rawArgs, parentIndex + 1, "parent goal id") : null;
+      const objective = rawArgs.filter(
+        (_, index) => parentIndex < 0 || index !== parentIndex && index !== parentIndex + 1
+      ).join(" ").trim();
+      if (!objective) throw new Error("Usage: tandem goal create [--parent <goal-id>] <objective>");
+      const goal = service.createGoal(objective, parentId);
+      console.log(JSON.stringify(goal, null, 2));
+      return;
+    }
+    if (subcommand === "update") {
+      const goalId = requireArg(rawArgs, 0, "goal id");
+      const status2 = GoalStatusSchema.parse(requireArg(rawArgs, 1, "goal status"));
+      const goal = service.updateGoalStatus(goalId, status2);
       console.log(JSON.stringify(goal, null, 2));
       return;
     }
@@ -5673,7 +5713,8 @@ Usage:
   tandem chat [--cd <repo>] [--model <model>] [initial prompt]
   tandem status
   tandem goal list
-  tandem goal create <objective>
+  tandem goal create [--parent <goal-id>] <objective>
+  tandem goal update <goal-id> <active|complete|blocked|canceled>
   tandem task list [--status <status>]
   tandem task show <task-id>
   tandem task watch <task-id> [--once]

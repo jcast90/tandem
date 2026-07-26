@@ -7,7 +7,7 @@ import { TandemService, workOrderFromInput } from "./service.js";
 const projectRoot = process.env.TANDEM_PROJECT_ROOT ?? process.cwd();
 const service = new TandemService();
 
-const instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Treat every <tandem-routing> directive as authoritative. When provider=claude, do not edit files or run implementation commands yourself: perform only minimal read-only inspection, define a bounded work order, and call tandem_delegate. When mode=codex, keep the request with Codex. In Auto mode with provider=codex, delegate later only if the request materially becomes substantive implementation or long-running execution. For substantial work, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. If a desktop routing directive specifies a Claude model or permission_mode, pass those exact values to tandem_delegate. Do not instruct workers to create commits; Tandem commits completed work after the worker reports. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch—tell the user to run tandem apply <taskId> after review.`;
+const instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Treat every <tandem-routing> directive as authoritative. Goal IDs supplied by that directive are already durable and authoritative: use outer_goal_id for the conversation objective and pass worker_goal_id unchanged as goal_id to tandem_delegate. When provider=claude, do not edit files or run implementation commands yourself: perform only minimal read-only inspection, define a bounded work order, and call tandem_delegate. When mode=codex, keep the request with Codex. In Auto mode with provider=codex, delegate later only if the request materially becomes substantive implementation or long-running execution; create a nested goal under outer_goal_id before doing so. For substantial work without supplied goal IDs, create a goal first and attach child tasks. Give workers explicit acceptance criteria and only the context they need. If a desktop routing directive specifies a Claude model or permission_mode, pass those exact values to tandem_delegate. Do not instruct workers to create commits; Tandem commits completed work after the worker reports. After delegating, keep calling tandem_task_wait with the newest event id until the task reaches completed, blocked, failed, or canceled. Briefly relay meaningful progress. If blocked, present the worker's questions to the user. If completed, review its isolated commit with git show <commitSha> and incorporate the worker's report into your response; do not claim completion without checking evidence. Do not automatically apply worker commits to the user's current branch—tell the user to run tandem apply <taskId> after review.`;
 
 const server = new McpServer(
   {
@@ -31,6 +31,19 @@ server.registerTool(
   },
   async ({ objective, parent_goal_id }) =>
     toolResult(service.createGoal(objective, parent_goal_id ?? null))
+);
+
+server.registerTool(
+  "tandem_goal_update",
+  {
+    title: "Update Tandem goal",
+    description: "Move a durable goal to its current lifecycle state.",
+    inputSchema: {
+      goal_id: z.string().min(1),
+      status: z.enum(["active", "complete", "blocked", "canceled"]),
+    },
+  },
+  async ({ goal_id, status }) => toolResult(service.updateGoalStatus(goal_id, status))
 );
 
 server.registerTool(

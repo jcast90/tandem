@@ -3,6 +3,7 @@ import { createWorkerAdapter } from "./providers/registry.js";
 import type { WorkerAdapter } from "./providers/types.js";
 import { resolveCmuxBinary } from "./runtime.js";
 import { runCommand } from "./process.js";
+import type { GoalStatus } from "./protocol.js";
 import { TandemStore } from "./store.js";
 import { commitWorktree } from "./workspace.js";
 
@@ -60,6 +61,7 @@ export async function runWorker(taskId: string): Promise<number> {
       const current = store.getTask(task.id);
       if (current && !["completed", "failed", "canceled"].includes(current.status)) {
         store.updateTask(task.id, { status: "canceled" });
+        updateLinkedGoal(store, task.goalId, "canceled");
         store.appendEvent(task.id, "worker.canceled", { signal: "SIGTERM" });
       }
     } finally {
@@ -75,6 +77,7 @@ export async function runWorker(taskId: string): Promise<number> {
       pid: process.pid,
       error: null,
     });
+    updateLinkedGoal(store, task.goalId, "active");
     store.appendEvent(task.id, "worker.started", {
       pid: process.pid,
       provider: profile.provider,
@@ -103,6 +106,7 @@ export async function runWorker(taskId: string): Promise<number> {
         summary: result.report.summary,
         report: result.report,
       });
+      updateLinkedGoal(store, task.goalId, "complete");
       store.appendEvent(task.id, "worker.completed", {
         commitSha,
         summary: result.report.summary,
@@ -120,6 +124,7 @@ export async function runWorker(taskId: string): Promise<number> {
       report: result.report,
       error: result.report.blockers.join("\n") || null,
     });
+    updateLinkedGoal(store, task.goalId, "blocked");
     store.appendEvent(task.id, `worker.${status}`, {
       summary: result.report.summary,
       blockers: result.report.blockers,
@@ -132,6 +137,7 @@ export async function runWorker(taskId: string): Promise<number> {
     if (interrupted) return 130;
     const message = error instanceof Error ? error.message : String(error);
     store.updateTask(task.id, { status: "failed", error: message });
+    updateLinkedGoal(store, task.goalId, "blocked");
     store.appendEvent(task.id, "worker.failed", { error: message });
     await updateCmux("failed", 1);
     await notifyCmux("Tandem worker failed", message);
@@ -143,6 +149,11 @@ export async function runWorker(taskId: string): Promise<number> {
     process.removeListener("SIGINT", cancel);
     store.close();
   }
+}
+
+function updateLinkedGoal(store: TandemStore, goalId: string | null, status: GoalStatus): void {
+  if (!goalId || !store.getGoal(goalId)) return;
+  store.updateGoalStatus(goalId, status);
 }
 
 async function updateCmux(status: string, progress: number): Promise<void> {

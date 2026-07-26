@@ -159,19 +159,26 @@ function streamingUserMessage(text: string): string {
 }
 
 function buildWorkerPrompt(task: TaskRecord): string {
+  const durableGoal = task.context.find((item) => item.startsWith("Durable worker goal ("));
   const acceptance =
     task.acceptanceCriteria.length > 0
       ? task.acceptanceCriteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
       : "No explicit criteria were supplied. Infer conservative, testable criteria from the objective.";
   const context =
-    task.context.length > 0
-      ? task.context.map((item) => `- ${item}`).join("\n")
+    task.context.filter((item) => item !== durableGoal).length > 0
+      ? task.context
+          .filter((item) => item !== durableGoal)
+          .map((item) => `- ${item}`)
+          .join("\n")
       : "- Inspect the repository and its local instructions.";
 
   return `You are Tandem's bounded execution worker.
 
 Objective:
 ${task.objective}
+
+Goal handoff:
+${durableGoal ?? "No durable worker goal was attached."}
 
 Acceptance criteria:
 ${acceptance}
@@ -186,6 +193,7 @@ Operating contract:
 - Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps and will commit after your report.
 - If the work order asks for a commit, interpret that as leaving the requested changes ready for Tandem to commit. Do not run git commit yourself.
 - Do not broaden the objective. If a material product decision or missing authority blocks safe execution, stop and report status "blocked" with concise questions.
+- Treat the durable worker goal as the outcome you own. Your terminal report determines whether Tandem completes or blocks that goal and its parent.
 - Report concrete evidence and the exact tests or checks run.
 - Your final response must satisfy the supplied JSON schema.`;
 }
