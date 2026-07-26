@@ -611,7 +611,7 @@ export function App() {
   const deleteChat = async (thread: CodexThread) => {
     const connection = connectionRef.current;
     if (!connection) return;
-    if (!window.confirm(`Delete “${thread.name || thread.preview || "Untitled chat"}”?`)) return;
+    if (!window.confirm(`Delete “${threadDisplayName(thread)}”?`)) return;
     try {
       await connection.deleteThread(thread.id);
       removeThread(thread.id);
@@ -905,7 +905,7 @@ export function App() {
                               type="button"
                               onClick={() => void selectThread(thread)}
                             >
-                              {thread.name || thread.preview || "Untitled chat"}
+                              {threadDisplayName(thread)}
                             </button>
                             <button
                               className="chat-actions"
@@ -974,7 +974,9 @@ export function App() {
             <strong>
               {settingsOpen
                 ? "Settings"
-                : activeThread?.name || activeThread?.preview || "New chat"}
+                : activeThread
+                  ? threadDisplayName(activeThread)
+                  : "New chat"}
             </strong>
             <span>{settingsOpen ? "Connections and setup" : projectName(activeProject)}</span>
           </div>
@@ -2102,6 +2104,10 @@ function goalsForHandoff(handoff: GoalHandoff | undefined, goals: Map<string, Go
 
 function visibleUserText(text: string): string {
   return text.replace(/\n*\n*<tandem-routing>[\s\S]*?<\/tandem-routing>/g, "").trim();
+}
+
+function threadDisplayName(thread: Pick<CodexThread, "name" | "preview">): string {
+  return visibleUserText(thread.name || thread.preview || "") || "Untitled chat";
 }
 
 function readStoredProjects(): Project[] {
