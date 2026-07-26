@@ -57,8 +57,8 @@ describe("Claude worker activity", () => {
     ]);
 
     expect(groupWorkerActivities(task).map((group) => group.label)).toEqual([
-      "Started Explore subagent",
-      "Started Review subagent",
+      "Explore subtask started",
+      "Review subtask started",
     ]);
     expect(workerSubagentCount(task)).toBe(2);
   });

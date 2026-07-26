@@ -4450,7 +4450,9 @@ Operating contract:
 - If the work order asks for a commit, interpret that as leaving the requested changes ready for Tandem to commit. Do not run git commit yourself.
 - Do not broaden the objective. If a material product decision or missing authority blocks safe execution, stop and report status "blocked" with concise questions.
 - Treat the durable worker goal as the outcome you own. Your terminal report determines whether Tandem completes or blocks that goal and its parent.
-- Report concrete evidence and the exact tests or checks run.
+- Write summary as a plain-language outcome for the user: one to three short sentences, no command transcript, no exhaustive file-by-file narration, and no more than 600 characters. Put implementation detail in evidence instead.
+- Put only decisions that genuinely require the user's answer in questions. Phrase each as a direct, standalone question without mentioning Claude, the worker, or internal handoffs. Use blockers for non-question impediments.
+- Report concrete evidence and the exact tests or checks run in their dedicated fields.
 - Your final response must satisfy the supplied JSON schema.`;
 }
 function parseReport(event) {

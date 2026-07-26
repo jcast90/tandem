@@ -106,7 +106,7 @@ export function WorkTrace({
                 <div className={index === 0 ? "outer" : "nested"} key={goal.id}>
                   <i className={`goal-status ${goal.status}`} aria-hidden="true" />
                   <span>
-                    <strong>{index === 0 ? "Outer goal" : "Claude goal"}</strong>
+                    <strong>{index === 0 ? "Conversation goal" : "Implementation goal"}</strong>
                     <small>{goal.objective}</small>
                   </span>
                   <em>{goal.status}</em>
@@ -144,18 +144,16 @@ export function WorkTrace({
                 }
               >
                 {claudeAssigned
-                  ? "Claude worker assignment confirmed"
+                  ? "Delegated work started"
                   : running
-                    ? "Waiting for Claude worker assignment"
-                    : "Claude was selected, but no worker was assigned"}
+                    ? "Preparing delegated work"
+                    : "Delegated work was selected but did not start"}
               </span>
             )}
-            <span>
-              {subagentCount > 0
-                ? `${subagentCount} Codex ${subagentCount === 1 ? "subagent" : "subagents"} reported`
-                : "No Codex subagents reported"}
-            </span>
-            <span>Claude workers appear as assigned task cards</span>
+            {subagentCount > 0 && (
+              <span>{`${subagentCount} ${subagentCount === 1 ? "subtask" : "subtasks"} reported`}</span>
+            )}
+            <span>Delegated work appears inline in the conversation</span>
           </div>
         </div>
       )}

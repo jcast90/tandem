@@ -51,7 +51,7 @@ export function workerEventLabel(payload: Record<string, unknown>): string {
   const kind = stringValue(payload.kind);
   const tool = stringValue(payload.tool);
   if (kind === "subagent") {
-    return `Started ${stringValue(payload.agentType) || "Claude"} subagent`;
+    return `${humanizeName(payload.agentType) || "General"} subtask started`;
   }
   if (kind === "read") return "Read a file";
   if (kind === "file") return tool === "Write" ? "Created a file" : "Edited a file";
@@ -60,8 +60,8 @@ export function workerEventLabel(payload: Record<string, unknown>): string {
   if (kind === "skill") return "Loaded a skill";
   if (kind === "web") return "Searched the web";
   if (kind === "task") return "Updated its task list";
-  if (kind === "progress") return "Claude reported progress";
-  return stringValue(payload.detail) || (tool ? `Used ${tool}` : "Claude reported progress");
+  if (kind === "progress") return "Progress update";
+  return stringValue(payload.detail) || (tool ? `Used ${tool}` : "Progress update");
 }
 
 export function workerEventDetails(payload: Record<string, unknown>): string[] {
@@ -84,8 +84,13 @@ function workerEventDetail(payload: Record<string, unknown>): string {
     stringValue(payload.detail) ||
     stringValue(payload.path) ||
     stringValue(payload.tool) ||
-    "Claude worker activity"
+    "Worker activity"
   );
+}
+
+function humanizeName(value: unknown): string {
+  const name = stringValue(value).replace(/[-_]+/g, " ").trim();
+  return name.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function activityKind(value: unknown): ActivityKind {

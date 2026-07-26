@@ -52,6 +52,7 @@ import {
   workerEventLabel,
   workerSubagentCount,
 } from "./lib/workerActivity";
+import { conciseWorkerOutcome, workerSubtaskNames, workerTaskName } from "./lib/workerPresentation";
 import type {
   Activity,
   Bootstrap,
@@ -1881,11 +1882,6 @@ function WorkerCard({
     startedAt && Number.isFinite(startedAt)
       ? Math.max(0, (active ? now : updatedAt || now) - startedAt)
       : null;
-  const subagentCount = new Set(
-    progress
-      .filter((event) => event.payload.subagent === true)
-      .map((event) => String(event.payload.toolUseId ?? event.id))
-  ).size;
   const statusLabel =
     status === "completed"
       ? "Completed"
@@ -1904,6 +1900,13 @@ function WorkerCard({
       : status === "blocked" || status === "failed"
         ? "failed"
         : "running";
+  const objective = task?.objective ?? fallbackObjective;
+  const taskName = workerTaskName(objective);
+  const outcome = report ? conciseWorkerOutcome(report) : "";
+  const subtaskNames = workerSubtaskNames(task);
+  const fullSummaryDiffers = Boolean(
+    report && outcome !== report.summary.replace(/\s+/g, " ").trim()
+  );
 
   useEffect(() => {
     if (!active) return;
@@ -1914,11 +1917,12 @@ function WorkerCard({
   return (
     <article className={`worker-card ${statusClass}`}>
       <div className="worker-card-heading">
-        <span className="worker-provider-mark" aria-hidden="true">
-          C
-        </span>
+        <div className="assistant-mark worker-mark" aria-label="Tandem">
+          <span />
+          <span />
+        </div>
         <div>
-          <strong>Claude worker</strong>
+          <strong>{taskName}</strong>
           <span>
             {statusLabel}
             {elapsed !== null ? ` · ${durationLabel(elapsed)}` : ""}
@@ -1936,24 +1940,15 @@ function WorkerCard({
                 onNotice(error instanceof Error ? error.message : String(error));
               }
             }}
-            aria-label="Stop Claude worker"
-            title="Stop Claude worker"
+            aria-label="Stop this work"
+            title="Stop this work"
           >
             <StopIcon />
           </button>
         )}
         <i className={`activity-status ${statusClass}`} aria-hidden="true" />
       </div>
-      <div className="worker-meta">
-        <span>{task?.workerModel || task?.profileId || "Claude CLI"}</span>
-        <span>{startedAt ? `Started ${timeLabel(startedAt)}` : "Starting now"}</span>
-        <span>
-          {subagentCount > 0
-            ? `${subagentCount} ${subagentCount === 1 ? "subagent" : "subagents"}`
-            : "No subagents reported"}
-        </span>
-      </div>
-      <p className="worker-objective">{task?.objective ?? fallbackObjective}</p>
+      {(!report || active) && <p className="worker-objective">{objective}</p>}
 
       {progress.length > 0 && !report && (
         <div className="worker-progress">
@@ -1993,8 +1988,8 @@ function WorkerCard({
                 onKeyDown={(event) => {
                   if (event.key === "Escape") setSteering(false);
                 }}
-                placeholder="Guide Claude while it works"
-                aria-label="Steer Claude worker"
+                placeholder="Add guidance while this runs"
+                aria-label="Guide this work"
                 autoFocus
               />
               <button
@@ -2008,7 +2003,7 @@ function WorkerCard({
                     });
                     setGuidance("");
                     setSteering(false);
-                    onNotice("Guidance sent to the Claude worker.");
+                    onNotice("Guidance sent.");
                     onRefresh();
                   } catch (error) {
                     onNotice(error instanceof Error ? error.message : String(error));
@@ -2020,7 +2015,7 @@ function WorkerCard({
             </>
           ) : (
             <button type="button" onClick={() => setSteering(true)}>
-              Steer Claude
+              Guide work
             </button>
           )}
         </div>
@@ -2028,21 +2023,96 @@ function WorkerCard({
 
       {report && (
         <div className="worker-result">
-          <p>{report.summary}</p>
+          <div className="worker-outcome">
+            <MarkdownMessage text={outcome} onOpenFile={onOpenFile} />
+          </div>
           {report.questions.length > 0 && (
-            <div className="worker-questions">
-              <strong>Questions</strong>
+            <section className={`worker-questions ${status === "blocked" ? "blocking" : ""}`}>
+              <strong>
+                {status === "blocked"
+                  ? "Your input is needed"
+                  : report.questions.length === 1
+                    ? "One decision to make"
+                    : `${report.questions.length} decisions to make`}
+              </strong>
               {report.questions.map((question) => (
-                <span key={question}>{question}</span>
+                <div key={question}>
+                  <MarkdownMessage text={question} onOpenFile={onOpenFile} />
+                </div>
               ))}
+              <small>Reply below and Tandem will take it from here.</small>
+            </section>
+          )}
+          <details className="worker-technical">
+            <summary>
+              <span>Technical details</span>
+              <ChevronIcon className="chevron" />
+            </summary>
+            <div className="worker-technical-body">
+              <dl>
+                <div>
+                  <dt>Execution</dt>
+                  <dd>{task?.workerModel || task?.profileId || "Claude CLI"}</dd>
+                </div>
+                <div>
+                  <dt>Started</dt>
+                  <dd>{startedAt ? timeLabel(startedAt) : "Not reported"}</dd>
+                </div>
+                {subtaskNames.length > 0 && (
+                  <div>
+                    <dt>Subtasks</dt>
+                    <dd>{subtaskNames.join(", ")}</dd>
+                  </div>
+                )}
+                {task?.commitSha && (
+                  <div>
+                    <dt>Commit</dt>
+                    <dd>{task.commitSha.slice(0, 8)}</dd>
+                  </div>
+                )}
+              </dl>
+              <section>
+                <strong>Assigned task</strong>
+                <p>{objective}</p>
+              </section>
+              {fullSummaryDiffers && (
+                <section>
+                  <strong>Full report</strong>
+                  <MarkdownMessage text={report.summary} onOpenFile={onOpenFile} />
+                </section>
+              )}
+              {report.evidence.length > 0 && (
+                <section>
+                  <strong>Evidence</strong>
+                  <ul>
+                    {report.evidence.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {report.tests.length > 0 && (
+                <section>
+                  <strong>Verification</strong>
+                  <ul>
+                    {report.tests.map((test) => (
+                      <li key={test}>{test}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {report.blockers.length > 0 && (
+                <section>
+                  <strong>Blockers</strong>
+                  <ul>
+                    {report.blockers.map((blocker) => (
+                      <li key={blocker}>{blocker}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </div>
-          )}
-          {report.tests.length > 0 && (
-            <span className="worker-evidence">Verified: {report.tests.join(" · ")}</span>
-          )}
-          {task?.commitSha && (
-            <span className="worker-commit">Isolated commit {task.commitSha.slice(0, 8)}</span>
-          )}
+          </details>
         </div>
       )}
 
