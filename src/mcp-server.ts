@@ -24,9 +24,10 @@ server.registerTool(
   {
     title: "Create Tandem discussion room",
     description:
-      "Start one to five rounds of blind proposals, challenge, reframing, falsification, and revision before a chair synthesis across configured CLI profiles.",
+      "Start a general deliberation or five-round Problem Discovery Room before a separate chair synthesis across configured CLI profiles.",
     inputSchema: {
       question: z.string().min(1),
+      preset: z.enum(["general", "problem-discovery"]).optional(),
       participants: z
         .array(
           z.object({
@@ -44,6 +45,7 @@ server.registerTool(
   },
   async ({
     question,
+    preset,
     participants,
     chair_profile_id,
     rounds,
@@ -54,6 +56,7 @@ server.registerTool(
       await service.createDeliberationRoom(
         {
           question,
+          preset: preset ?? "general",
           participants: participants.map((participant) => ({
             profileId: participant.profile_id,
             model: participant.model ?? null,

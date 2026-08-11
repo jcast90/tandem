@@ -69,7 +69,7 @@ describe("provider-neutral deliberation rooms", () => {
     expect(synthesisContract(plan.room)).toContain("Minority concerns");
   });
 
-  it("rejects duplicate participants and a chair outside the room", () => {
+  it("rejects duplicate participants", () => {
     expect(() =>
       planDeliberation(
         {
@@ -82,6 +82,32 @@ describe("provider-neutral deliberation rooms", () => {
     ).toThrow();
   });
 
+  it("plans a five-round problem discovery preset with a non-voting chair", () => {
+    const plan = planDeliberation(
+      {
+        question: "Find a painful, reachable problem worth solving.",
+        preset: "problem-discovery",
+        participants: [{ profileId: "worker-primary" }, { profileId: "fallback-freebuff" }],
+        chairProfileId: "outer-primary",
+        rounds: 2,
+      },
+      DEFAULT_CONFIG
+    );
+
+    expect(plan.room.rounds).toBe(5);
+    expect(plan.room.question).toContain("Google Trends is one signal, never the decision");
+    expect(
+      plan.stages.slice(0, 5).every((stage) => !stage.profileIds.includes("outer-primary"))
+    ).toBe(true);
+    expect(plan.stages.at(-1)).toEqual({
+      kind: "synthesis",
+      round: 6,
+      profileIds: ["outer-primary"],
+      blind: false,
+    });
+    expect(synthesisContract(plan.room)).toContain("Surviving problem cards");
+  });
+
   it("runs independent turns in parallel, persists every round, and returns chair synthesis", async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-room-runner-"));
     cleanup.push(root);
@@ -90,8 +116,8 @@ describe("provider-neutral deliberation rooms", () => {
       projectRoot: root,
       question: "Choose the safest execution plan.",
       participants: [
-        { profileId: "outer-primary", model: null },
         { profileId: "worker-primary", model: null },
+        { profileId: "fallback-freebuff", model: null },
       ],
       chairProfileId: "outer-primary",
       rounds: 2,

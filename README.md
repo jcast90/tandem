@@ -326,6 +326,24 @@ The same create, wait, contribute, and cancel lifecycle is available to the
 outer conversation through Tandem's MCP tools, so the completed chair synthesis
 can appear as a single response in the chat.
 
+For product research, set `preset` to `problem-discovery`. Tandem fixes the room
+at five rounds, keeps the configured chair out of participant ballots, and ends
+with ranked problem cards instead of a product pitch. The protocol treats
+competition, workarounds, existing spend, and buyer reachability as primary
+evidence. Google Trends comparisons are recorded as a supporting signal with
+their query, geography, time range, direction, baseline, and caveats; relative
+search interest never counts as market size or willingness to pay.
+
+```json
+{
+  "question": "Find a painful, reachable problem worth solving.",
+  "preset": "problem-discovery",
+  "participants": [{ "profileId": "worker-primary" }, { "profileId": "fallback-freebuff" }],
+  "chairProfileId": "outer-primary",
+  "maxEstimatedTokens": 120000
+}
+```
+
 Routing fallback chains are ordered and never loop:
 
 ```bash

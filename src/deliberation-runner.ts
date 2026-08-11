@@ -247,7 +247,7 @@ export class DeliberationRunner {
     round: number,
     profileId: string
   ): string {
-    const alias = participantAlias(room, profileId);
+    const alias = stage === "synthesis" ? "the chair" : participantAlias(room, profileId);
     const base = `You are ${alias}, a coworker participating in a provider-neutral Tandem deliberation room.
 
 The user's seed idea or question:
@@ -335,6 +335,9 @@ function roomInput(room: DeliberationRoomRecord): DeliberationRoom {
     question: room.question,
     participants: room.participants,
     chairProfileId: room.chairProfileId,
+    preset: room.question.includes("<tandem-problem-discovery-v1>")
+      ? "problem-discovery"
+      : "general",
     rounds: room.rounds,
     maxEstimatedTokens: room.maxEstimatedTokens,
     preserveDissent: room.preserveDissent,
