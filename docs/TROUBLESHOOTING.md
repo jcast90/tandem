@@ -11,8 +11,9 @@ selection, and authentication diagnostics without starting a task.
 
 ## `tandem: command not found`
 
-The source installer places the launcher in `~/.local/bin` by default. Add that
-directory to `PATH` and open a new terminal:
+For a new installation, the release installer places the CLI in `~/.local/bin`
+and adds it to zsh's login profile. Open a new terminal, or add it to `PATH` for
+the current shell:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -34,7 +35,7 @@ command -v node
 ```
 
 After changing Node versions with NVM, asdf, or another version manager, open a
-new terminal and rerun `./scripts/install.sh`.
+new terminal and rerun the release install command.
 
 ## Codex or Claude is reported as missing
 

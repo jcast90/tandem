@@ -41,6 +41,7 @@ import { configPath, tandemHome } from "./paths.js";
 import { runWorker } from "./worker.js";
 import { planDeliberation, synthesisContract } from "./deliberation.js";
 import { nextPermissionMode, permissionMode, ponytailMode } from "./policy.js";
+import { installLatestRelease } from "./updater.js";
 
 const args = process.argv.slice(2);
 const command = args.shift() ?? "help";
@@ -61,6 +62,9 @@ try {
       break;
     case "resume":
       await resumeConversation(args);
+      break;
+    case "update":
+      await installLatestRelease();
       break;
     case "permissions":
       await permissionsCommand(args);
@@ -1317,6 +1321,7 @@ Usage:
   tandem conversation list
   tandem conversation show <conversation-id>
   tandem resume <conversation-id> [prompt]
+  tandem update
   tandem permissions [ask|auto|full]
   tandem ponytail status
   tandem ponytail install

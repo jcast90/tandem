@@ -25,9 +25,9 @@ of truth.
 
 ## Quick start
 
-The supported source installer runs on macOS, Linux, and WSL. It installs the
-`tandem` launcher into `~/.local/bin` without changing your shell configuration
-or using a global package link.
+The release installer runs on macOS, Linux, and WSL. It installs a standalone
+CLI and, on macOS, the signed and notarized desktop app. No source checkout or
+local build is required.
 
 ### 1. Install the prerequisites
 
@@ -59,16 +59,16 @@ commands.
 ### 2. Install Tandem
 
 ```bash
-git clone https://github.com/jcast90/tandem.git
-cd tandem
-./scripts/install.sh
+curl -fsSL https://github.com/jcast90/tandem/releases/latest/download/install.sh | bash
 ```
 
-The installer uses an existing `pnpm`, Corepack, or an isolated `npx` fallback;
-you do not need to configure a global pnpm directory.
+The installer verifies release checksums, upgrades an existing Tandem CLI in
+place, and adds `~/.local/bin` to zsh's login profile for a new installation.
+Future releases use one command:
 
-If `~/.local/bin` is not already on `PATH`, the installer prints the exact line
-to add to your shell profile. Open a new terminal after adding it.
+```bash
+tandem update
+```
 
 ### 3. Configure and verify
 
@@ -84,9 +84,9 @@ cd ~/projects/my-app
 tandem chat
 ```
 
-For manual installation, desktop build prerequisites, uninstalling, and
-platform notes, see [Installation](docs/INSTALL.md). For common first-run
-problems, see [Troubleshooting](docs/TROUBLESHOOTING.md).
+For contributor builds, release operations, uninstalling, and platform notes,
+see [Installation](docs/INSTALL.md). For common first-run problems, see
+[Troubleshooting](docs/TROUBLESHOOTING.md).
 
 ## Status
 
