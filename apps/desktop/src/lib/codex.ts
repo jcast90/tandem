@@ -41,7 +41,7 @@ interface RpcNotification {
 
 export interface CodexEvents {
   onDelta: (itemId: string, delta: string) => void;
-  onItem: (item: CodexItem, complete: boolean) => void;
+  onItem: (item: CodexItem, complete: boolean, turnId: string, observedAt: number) => void;
   onTurnStarted: (turnId: string) => void;
   onTurnComplete: (turnId: string, status: string) => void;
   onActivity: (activity: Activity) => void;
@@ -142,6 +142,14 @@ export class CodexConnection {
   async resumeThread(threadId: string): Promise<CodexThread> {
     const result = (await this.request("thread/resume", {
       threadId,
+    })) as { thread: CodexThread };
+    return result.thread;
+  }
+
+  async readThread(threadId: string): Promise<CodexThread> {
+    const result = (await this.request("thread/read", {
+      threadId,
+      includeTurns: true,
     })) as { thread: CodexThread };
     return result.thread;
   }
@@ -366,11 +374,12 @@ export class CodexConnection {
       const item = params.item as CodexItem | undefined;
       if (!item) return;
       const complete = message.method === "item/completed";
-      this.events.onItem(item, complete);
       const observedAt = Number(
         complete ? (params.completedAtMs ?? Date.now()) : (params.startedAtMs ?? Date.now())
       );
-      const activity = activityFromItem(item, complete, String(params.turnId ?? ""), observedAt);
+      const turnId = String(params.turnId ?? "");
+      this.events.onItem(item, complete, turnId, observedAt);
+      const activity = activityFromItem(item, complete, turnId, observedAt);
       if (activity) {
         this.activityById.set(activity.id, activity);
         this.events.onActivity(activity);

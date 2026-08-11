@@ -27,6 +27,7 @@ export interface Task {
   runtime: string;
   runtimeRef: string | null;
   workerModel: string | null;
+  workerEffort?: string | null;
   permissionMode: string | null;
   commitSha: string | null;
   summary: string | null;
@@ -51,6 +52,111 @@ export interface TaskEvent {
   eventType: string;
   payload: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface ExecutionRun {
+  id: string;
+  goalId: string | null;
+  repoRoot: string;
+  objective: string;
+  status: string;
+  sourceSha: string;
+  policy: {
+    maxConcurrency?: number;
+    maxTasks?: number;
+    maxEstimatedTokens?: number;
+    maxWallTimeMs?: number;
+    failureMode?: string;
+    autoIntegrate?: boolean;
+  } | null;
+  integrationCommitSha: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  taskIds: string[];
+}
+
+export type BenchmarkVariant = "codex-only" | "claude-only" | "manual-dual" | "tandem-auto";
+
+export interface BenchmarkVariantSummary {
+  variant: BenchmarkVariant;
+  trialCount: number;
+  scoredCount: number;
+  acceptedCount: number;
+  acceptanceRate: number | null;
+  averageQuality: number | null;
+  qualityAdjustedPoints: number;
+  qualityAdjustedPointsPer100Dollars: number | null;
+  qualityAdjustedPointsPerHour: number | null;
+  qualityAdjustedPointsPerHumanHour: number | null;
+  durationMs: number;
+  humanMinutes: number;
+  revisionCount: number;
+  reportedTokens: number | null;
+  codexUsagePercentDelta: number | null;
+  claudeUsagePercentDelta: number | null;
+}
+
+export interface BenchmarkTrial {
+  id: string;
+  benchmarkId: string;
+  executionGroupId: string | null;
+  label: string;
+  variant: BenchmarkVariant;
+  taskClass: RoutingTaskClass;
+  difficulty: number;
+  accepted: boolean | null;
+  qualityScore: number | null;
+  wallTimeMinutes: number | null;
+  humanMinutes: number | null;
+  revisionCount: number;
+  reportedTokens: number | null;
+  codexUsagePercentDelta: number | null;
+  claudeUsagePercentDelta: number | null;
+  notes: string | null;
+  metrics: {
+    durationMs: number | null;
+    completedTasks: number;
+    failedTasks: number;
+    evidenceCount: number;
+    testCount: number;
+    reportedTokens: number | null;
+    qualityAdjustedPoints: number;
+  };
+}
+
+export interface BenchmarkReport {
+  benchmark: {
+    id: string;
+    name: string;
+    hypothesis: string;
+    monthlyBudgetCents: number;
+    status: "active" | "complete" | "archived";
+    createdAt: string;
+    updatedAt: string;
+  };
+  variants: BenchmarkVariantSummary[];
+  trials: BenchmarkTrial[];
+}
+
+export interface BenchmarkTrialInput {
+  benchmarkId: string;
+  variant: BenchmarkVariant;
+  label: string;
+  taskClass: RoutingTaskClass;
+  difficulty: number;
+  runId?: string;
+}
+
+export interface BenchmarkScoreInput {
+  trialId: string;
+  accepted: boolean;
+  qualityScore: number;
+  wallTimeMinutes: number;
+  humanMinutes: number;
+  revisionCount: number;
+  codexUsagePercentDelta?: number;
+  claudeUsagePercentDelta?: number;
 }
 
 export interface TaskFile {
@@ -84,11 +190,35 @@ export interface PluginOption {
 export type PermissionMode = "ask" | "auto" | "full";
 export type ProviderRoute = "auto" | "codex" | "claude";
 export type ResolvedProviderRoute = Exclude<ProviderRoute, "auto">;
+export type RoutingTaskClass =
+  "conversation" | "quick" | "research" | "architecture" | "implementation" | "verification";
+
+export interface RoutingProfile {
+  id: string;
+  role: string;
+  provider: string;
+  transport: string;
+  model: string | null;
+}
+
+export interface RoutingRule {
+  taskClass: RoutingTaskClass;
+  profileId: string;
+  fallbackProfileIds: string[];
+  model: string | null;
+  effort: string | null;
+  maxConcurrency: number;
+}
 
 export interface RoutingDecision {
   mode: ProviderRoute;
   provider: ResolvedProviderRoute;
   reason: string;
+  taskClass?: RoutingTaskClass;
+  profileId?: string;
+  model?: string | null;
+  effort?: string | null;
+  maxConcurrency?: number;
 }
 
 export interface GoalHandoff {
@@ -133,6 +263,9 @@ export interface Bootstrap {
   claude: SubscriptionStatus;
   goals: Goal[];
   tasks: Task[];
+  runs: ExecutionRun[];
+  routingProfiles: RoutingProfile[];
+  routingRules: RoutingRule[];
 }
 
 export interface CodexThread {
@@ -142,6 +275,10 @@ export interface CodexThread {
   cwd: string;
   createdAt: number;
   updatedAt: number;
+  parentThreadId?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+  modelProvider?: string;
   turns: CodexTurn[];
 }
 
@@ -227,6 +364,7 @@ export type CodexItem =
       receiverThreadIds: string[];
       prompt?: string | null;
       model?: string | null;
+      reasoningEffort?: string | null;
       agentsStates?: Record<string, { status: string; message?: string | null }>;
     }
   | {
@@ -304,4 +442,16 @@ export interface Activity {
   details?: string[] | undefined;
   subagentIds?: string[] | undefined;
   visibility?: "routine" | undefined;
+}
+
+export interface CodexSubagent {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "completed" | "failed" | "interrupted";
+  prompt: string;
+  summary: string;
+  model: string | null;
+  reasoningEffort: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
 }

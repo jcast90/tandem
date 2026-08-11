@@ -10,6 +10,12 @@ import {
   type TaskRecord,
   type WorkerReport,
 } from "../protocol.js";
+import {
+  claudePermissionMode,
+  ponytailWorkerInstruction,
+  taskPonytailMode,
+  taskReferenceDirectories,
+} from "../policy.js";
 import { findExecutable, sanitizeWorkerEnv, truncate } from "../process.js";
 import { logsDir } from "../paths.js";
 import type { WorkerAdapter, WorkerRunResult } from "./types.js";
@@ -58,30 +64,14 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
 
     await mkdir(logsDir(), { recursive: true });
     const streamLog = join(logsDir(), `${task.id}.claude.jsonl`);
-    const permissionMode =
-      task.permissionMode ?? stringSetting(profile, "permissionMode") ?? "auto";
-    const effort = stringSetting(profile, "effort");
-    const args = [
-      "-p",
-      "--input-format",
-      "stream-json",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--json-schema",
-      JSON.stringify(REPORT_JSON_SCHEMA),
-      "--permission-mode",
-      permissionMode,
-      "--name",
-      `tandem-${task.id.slice(0, 8)}`,
-    ];
-    const model = task.workerModel ?? profile.model;
-    if (model) args.push("--model", model);
-    if (effort) args.push("--effort", effort);
+    const args = claudeCliArgs(profile, task);
 
     const child = spawn(executable, args, {
       cwd: task.worktreePath,
-      env: sanitizeWorkerEnv(process.env),
+      env: {
+        ...sanitizeWorkerEnv(process.env),
+        PONYTAIL_DEFAULT_MODE: taskPonytailMode(task),
+      },
       stdio: "pipe",
     });
     this.child = child;
@@ -148,6 +138,37 @@ export class ClaudeCliWorkerAdapter implements WorkerAdapter {
   }
 }
 
+export function claudeCliArgs(profile: Profile, task: TaskRecord): string[] {
+  const selectedPermissionMode = claudePermissionMode(
+    task.permissionMode ?? profile.settings.permissionMode
+  );
+  const effort = task.workerEffort ?? stringSetting(profile, "effort");
+  const args = [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--forward-subagent-text",
+    "--json-schema",
+    JSON.stringify(REPORT_JSON_SCHEMA),
+    "--permission-mode",
+    selectedPermissionMode,
+    "--name",
+    `tandem-${task.id.slice(0, 8)}`,
+  ];
+  if (selectedPermissionMode === "bypassPermissions") {
+    args.push("--dangerously-skip-permissions");
+  }
+  const model = task.workerModel ?? profile.model;
+  if (model) args.push("--model", model);
+  if (effort) args.push("--effort", effort);
+  const referenceDirectories = taskReferenceDirectories(task);
+  if (referenceDirectories.length > 0) args.push("--add-dir", ...referenceDirectories);
+  return args;
+}
+
 function streamingUserMessage(text: string): string {
   return `${JSON.stringify({
     type: "user",
@@ -186,9 +207,13 @@ ${acceptance}
 Context:
 ${context}
 
+Execution optimization:
+${ponytailWorkerInstruction(taskPonytailMode(task))}
+
 Operating contract:
 - Work only inside the current Git worktree.
 - Read and follow repository instructions such as AGENTS.md and CLAUDE.md.
+- Before implementation, assess whether two or more independent workstreams can run in parallel. Use Agent subagents for independent read-only repository mapping, test diagnosis, or review when the expected latency or quality gain exceeds token and coordination cost. Use at most three child agents, give each a bounded objective, keep this primary worker responsible for edits and integration, and never allow concurrent edits to overlapping files. Stay serial when dependencies or coordination cost make that more efficient.
 - Implement the requested change, run proportionate verification, and leave all useful changes in the worktree.
 - Do not create commits, branches, pull requests, or modify other worktrees; Tandem owns those lifecycle steps and will commit after your report.
 - If the work order asks for a commit, interpret that as leaving the requested changes ready for Tandem to commit. Do not run git commit yourself.
@@ -197,6 +222,7 @@ Operating contract:
 - Write summary as a plain-language outcome for the user: one to three short sentences, no command transcript, no exhaustive file-by-file narration, and no more than 600 characters. Put implementation detail in evidence instead.
 - Put only decisions that genuinely require the user's answer in questions. Phrase each as a direct, standalone question without mentioning Claude, the worker, or internal handoffs. Use blockers for non-question impediments.
 - Report concrete evidence and the exact tests or checks run in their dedicated fields.
+- Include a concise parallelism decision in evidence: either which independent child-agent workstreams ran, or why serial execution was more efficient.
 - Your final response must satisfy the supplied JSON schema.`;
 }
 
@@ -245,6 +271,12 @@ export function extractClaudeActivities(event: Record<string, unknown>): Record<
     return [];
   }
   if (event.type !== "assistant" || !isObject(event.message)) return [];
+  const parentToolUseId =
+    typeof event.parent_tool_use_id === "string"
+      ? event.parent_tool_use_id
+      : typeof event.message.parent_tool_use_id === "string"
+        ? event.message.parent_tool_use_id
+        : undefined;
   const content = event.message.content;
   if (!Array.isArray(content)) return [];
   return content.flatMap<Record<string, unknown>>((item) => {
@@ -254,6 +286,7 @@ export function extractClaudeActivities(event: Record<string, unknown>): Record<
         {
           kind: "progress",
           detail: truncate(item.text, 180),
+          parentToolUseId,
           subagent: false,
         },
       ];
@@ -264,6 +297,7 @@ export function extractClaudeActivities(event: Record<string, unknown>): Record<
       {
         tool: item.name,
         toolUseId: typeof item.id === "string" ? item.id : undefined,
+        parentToolUseId,
         ...metadata,
       },
     ];
@@ -285,18 +319,20 @@ function describeToolUse(name: string, input: unknown): Record<string, unknown> 
       : typeof input.prompt === "string"
         ? input.prompt
         : null;
+  const command = typeof input.command === "string" ? input.command : null;
   const detail = path
     ? `${name}: ${truncate(path, 90)}`
     : description
       ? truncate(description, 100)
-      : typeof input.command === "string"
-        ? `${name}: ${truncate(input.command, 90)}`
+      : command
+        ? `${name}: ${truncate(command, 90)}`
         : typeof input.pattern === "string"
           ? `${name}: ${truncate(input.pattern, 90)}`
           : `Using ${name}`;
   return {
     kind,
     detail,
+    command,
     path,
     subagent: kind === "subagent",
     agentType:

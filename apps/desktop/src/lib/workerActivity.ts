@@ -66,6 +66,7 @@ export function workerEventLabel(payload: Record<string, unknown>): string {
 
 export function workerEventDetails(payload: Record<string, unknown>): string[] {
   return [
+    stringValue(payload.command),
     stringValue(payload.detail),
     stringValue(payload.objective),
     stringValue(payload.path),
@@ -76,6 +77,16 @@ export function workerEventDetails(payload: Record<string, unknown>): string[] {
 export function workerSubagentCount(task: Task): number {
   return new Set(workerActivitiesFromTask(task).flatMap((activity) => activity.subagentIds ?? []))
     .size;
+}
+
+export function workerBackgroundTaskCount(task: Task): number {
+  return new Set(
+    task.events.flatMap((event) => {
+      if (event.eventType !== "worker.activity" || event.payload.kind !== "task") return [];
+      const taskId = stringValue(event.payload.taskId);
+      return taskId ? [taskId] : [];
+    })
+  ).size;
 }
 
 function workerEventDetail(payload: Record<string, unknown>): string {

@@ -81,6 +81,24 @@ export function ActivityIcon(props: IconProps) {
   );
 }
 
+export function AgentsIcon(props: IconProps) {
+  return (
+    <svg {...common} {...props}>
+      <rect x="6" y="5" width="12" height="10" rx="4" />
+      <path d="M9 19v-2M15 19v-2M9.5 9h.01M14.5 9h.01M10 12.2c1.2.8 2.8.8 4 0M12 5V2.5" />
+      <circle cx="12" cy="2.5" r=".8" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function BackIcon(props: IconProps) {
+  return (
+    <svg {...common} {...props}>
+      <path d="m14 6-6 6 6 6M8 12h11" />
+    </svg>
+  );
+}
+
 export function ChevronIcon(props: IconProps) {
   return (
     <svg {...common} {...props}>

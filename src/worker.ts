@@ -1,11 +1,16 @@
 import { loadConfig, resolveProfile } from "./config.js";
 import { createWorkerAdapter } from "./providers/registry.js";
 import type { WorkerAdapter } from "./providers/types.js";
-import { resolveCmuxBinary } from "./runtime.js";
+import {
+  nextFallbackProfileId,
+  classifyProviderFailure,
+  shouldFallbackProviderFailure,
+} from "./provider-failures.js";
+import { launchWorker, resolveCmuxBinary } from "./runtime.js";
 import { runCommand } from "./process.js";
 import type { GoalStatus } from "./protocol.js";
 import { TandemStore } from "./store.js";
-import { commitWorktree } from "./workspace.js";
+import { changedPathsBetween, commitWorktree } from "./workspace.js";
 
 export async function runWorker(taskId: string): Promise<number> {
   const store = new TandemStore();
@@ -15,7 +20,7 @@ export async function runWorker(taskId: string): Promise<number> {
     store.close();
     return 1;
   }
-  if (["completed", "failed", "canceled"].includes(task.status)) {
+  if (["completed", "failed", "skipped", "canceled"].includes(task.status)) {
     store.close();
     return 0;
   }
@@ -59,7 +64,7 @@ export async function runWorker(taskId: string): Promise<number> {
     adapter.cancel();
     try {
       const current = store.getTask(task.id);
-      if (current && !["completed", "failed", "canceled"].includes(current.status)) {
+      if (current && !["completed", "failed", "skipped", "canceled"].includes(current.status)) {
         store.updateTask(task.id, { status: "canceled" });
         updateLinkedGoal(store, task.goalId, "canceled");
         store.appendEvent(task.id, "worker.canceled", { signal: "SIGTERM" });
@@ -98,17 +103,30 @@ export async function runWorker(taskId: string): Promise<number> {
     }
 
     if (result.report.status === "completed") {
-      const commitSha = await commitWorktree(task.worktreePath, task.objective, task.repoRoot);
+      const commitSha = await commitWorktree(
+        task.worktreePath,
+        task.objective,
+        task.repoRoot,
+        task.baseSha,
+        `refs/tandem/tasks/${task.id}`
+      );
+      const changedPaths =
+        commitSha && task.baseSha
+          ? await changedPathsBetween(task.repoRoot, task.baseSha, commitSha)
+          : [];
+      if (interrupted || store.getTask(task.id)?.status === "canceled") return 130;
       store.updateTask(task.id, {
         status: "completed",
         providerSessionId: result.sessionId,
         commitSha,
+        changedPaths,
         summary: result.report.summary,
         report: result.report,
       });
       updateLinkedGoal(store, task.goalId, "complete");
       store.appendEvent(task.id, "worker.completed", {
         commitSha,
+        changedPaths,
         summary: result.report.summary,
       });
       await updateCmux("completed", 1);
@@ -136,9 +154,59 @@ export async function runWorker(taskId: string): Promise<number> {
   } catch (error) {
     if (interrupted) return 130;
     const message = error instanceof Error ? error.message : String(error);
+    const failureKind = classifyProviderFailure(error);
+    const nextProfileId = shouldFallbackProviderFailure(error)
+      ? nextFallbackProfileId(task.profileId, task.fallbackProfileIds, task.attemptedProfileIds)
+      : null;
+    if (nextProfileId) {
+      const nextProfile = resolveProfile(config, nextProfileId);
+      const attemptedProfileIds = Array.from(
+        new Set([...task.attemptedProfileIds, task.profileId])
+      );
+      const fallback = store.updateTask(task.id, {
+        status: nextProfile.settings.interactiveOnly === true ? "blocked" : "queued",
+        profileId: nextProfile.id,
+        attemptedProfileIds,
+        pid: null,
+        runtimeRef: null,
+        error: null,
+      });
+      store.appendEvent(task.id, "worker.fallback.requested", {
+        fromProfileId: task.profileId,
+        toProfileId: nextProfile.id,
+        failureKind,
+        error: message,
+      });
+      if (nextProfile.settings.interactiveOnly === true) {
+        const blocker =
+          "Freebuff fallback is ready, but its current CLI requires an interactive terminal session.";
+        store.updateTask(task.id, { status: "blocked", error: blocker });
+        updateLinkedGoal(store, task.goalId, "blocked");
+        store.appendEvent(task.id, "worker.fallback.awaiting_interactive", {
+          profileId: nextProfile.id,
+          worktreePath: task.worktreePath,
+          command: `${nextProfile.command} --cwd ${task.worktreePath}`,
+        });
+        await updateCmux("fallback ready", 1);
+        await notifyCmux("Tandem fallback ready", blocker);
+        return 2;
+      }
+      const launch = await launchWorker(fallback, config.runtime);
+      store.updateTask(task.id, {
+        runtime: launch.runtime,
+        runtimeRef: launch.runtimeRef,
+      });
+      store.appendEvent(task.id, "worker.fallback.launched", {
+        profileId: nextProfile.id,
+        runtime: launch.runtime,
+        runtimeRef: launch.runtimeRef,
+      });
+      await updateCmux("falling back", 0.05);
+      return 0;
+    }
     store.updateTask(task.id, { status: "failed", error: message });
     updateLinkedGoal(store, task.goalId, "blocked");
-    store.appendEvent(task.id, "worker.failed", { error: message });
+    store.appendEvent(task.id, "worker.failed", { error: message, failureKind });
     await updateCmux("failed", 1);
     await notifyCmux("Tandem worker failed", message);
     console.error(message);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   groupWorkerActivities,
   workerActivitiesFromTask,
+  workerBackgroundTaskCount,
   workerSubagentCount,
 } from "../apps/desktop/src/lib/workerActivity.js";
 import type { Task, TaskEvent } from "../apps/desktop/src/types.js";
@@ -22,7 +23,23 @@ describe("Claude worker activity", () => {
     expect(groupWorkerActivities(task)).toEqual([
       expect.objectContaining({ label: "Read 2 files", count: 2 }),
       expect.objectContaining({ label: "Edited 1 file · 2 changes", count: 2 }),
-      expect.objectContaining({ label: "Ran a local command · 2 times", count: 2 }),
+      expect.objectContaining({ label: "Ran 2 local commands", count: 2 }),
+    ]);
+  });
+
+  it("keeps every command available inside one expandable group", () => {
+    const task = taskWithEvents([
+      activity(1, "Bash", "command", null, "Run the focused tests", "pnpm test focused"),
+      activity(2, "Bash", "command", null, "Check types", "pnpm typecheck"),
+      activity(3, "Bash", "command", null, "Inspect changes", "git diff --stat"),
+    ]);
+
+    expect(groupWorkerActivities(task)).toEqual([
+      expect.objectContaining({
+        label: "Ran 3 local commands",
+        count: 3,
+        details: expect.arrayContaining(["pnpm test focused", "pnpm typecheck", "git diff --stat"]),
+      }),
     ]);
   });
 
@@ -62,6 +79,17 @@ describe("Claude worker activity", () => {
     ]);
     expect(workerSubagentCount(task)).toBe(2);
   });
+
+  it("separates background tasks from reasoning subagents", () => {
+    const task = taskWithEvents([
+      backgroundTask(1, "tests-1", "Run focused tests"),
+      backgroundTask(2, "tests-1", "Run focused tests · completed"),
+      backgroundTask(3, "build-1", "Build the app"),
+    ]);
+
+    expect(workerBackgroundTaskCount(task)).toBe(2);
+    expect(workerSubagentCount(task)).toBe(0);
+  });
 });
 
 function taskWithEvents(events: TaskEvent[]): Task {
@@ -92,7 +120,8 @@ function activity(
   tool: string,
   kind: string,
   path: string | null,
-  objective = ""
+  objective = "",
+  command = ""
 ): TaskEvent {
   return {
     id,
@@ -103,8 +132,25 @@ function activity(
       toolUseId: `tool-${id}`,
       kind,
       detail: path ? `${tool}: ${path}` : objective,
+      command,
       path,
       objective,
+      subagent: false,
+    },
+  };
+}
+
+function backgroundTask(id: number, taskId: string, detail: string): TaskEvent {
+  return {
+    id,
+    eventType: "worker.activity",
+    createdAt: `2026-07-26T16:31:${String(id).padStart(2, "0")}.000Z`,
+    payload: {
+      kind: "task",
+      tool: "Task",
+      taskId,
+      detail,
+      objective: detail,
       subagent: false,
     },
   };

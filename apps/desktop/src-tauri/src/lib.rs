@@ -85,6 +85,23 @@ struct TaskEventView {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ExecutionRunView {
+    id: String,
+    goal_id: Option<String>,
+    repo_root: String,
+    objective: String,
+    status: String,
+    source_sha: String,
+    policy: Value,
+    integration_commit_sha: Option<String>,
+    error: Option<String>,
+    created_at: String,
+    updated_at: String,
+    task_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TaskFileView {
     path: String,
     absolute_path: String,
@@ -114,6 +131,9 @@ struct Bootstrap {
     claude: SubscriptionStatus,
     goals: Vec<GoalView>,
     tasks: Vec<TaskView>,
+    runs: Vec<ExecutionRunView>,
+    routing_profiles: Vec<RoutingProfileView>,
+    routing_rules: Vec<TaskRoutingRule>,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,6 +153,8 @@ struct TandemConfig {
 #[derive(Debug, Deserialize)]
 struct Profile {
     id: String,
+    #[serde(default)]
+    role: String,
     provider: String,
     transport: String,
     command: String,
@@ -143,6 +165,32 @@ struct Profile {
 struct Routing {
     outer: String,
     worker: String,
+    #[serde(default)]
+    reviewer: Option<String>,
+    #[serde(default, rename = "taskRules")]
+    task_rules: Vec<TaskRoutingRule>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskRoutingRule {
+    task_class: String,
+    profile_id: String,
+    #[serde(default = "default_fallback_profile_ids")]
+    fallback_profile_ids: Vec<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    max_concurrency: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RoutingProfileView {
+    id: String,
+    role: String,
+    provider: String,
+    transport: String,
+    model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -162,7 +210,7 @@ fn desktop_bootstrap_blocking() -> Result<Bootstrap, String> {
     let config = read_config(&home);
     let settings = read_desktop_settings(&home);
     let project_root = tandem_repo_root();
-    let (goals, tasks) = read_ledger(&home);
+    let (goals, tasks, runs) = read_ledger(&home);
 
     let outer = routed_profile(&config, true);
     let worker = routed_profile(&config, false);
@@ -193,6 +241,19 @@ fn desktop_bootstrap_blocking() -> Result<Bootstrap, String> {
         claude: probe_command(claude_command, "claude"),
         goals,
         tasks,
+        runs,
+        routing_profiles: config
+            .profiles
+            .iter()
+            .map(|profile| RoutingProfileView {
+                id: profile.id.clone(),
+                role: profile.role.clone(),
+                provider: profile.provider.clone(),
+                transport: profile.transport.clone(),
+                model: profile.model.clone(),
+            })
+            .collect(),
+        routing_rules: routing_rules(&config),
     })
 }
 
@@ -226,6 +287,66 @@ fn save_desktop_settings_blocking(
     if let Ok(mut process) = state.codex.lock() {
         *process = None;
     }
+    desktop_bootstrap_blocking()
+}
+
+#[tauri::command]
+async fn save_routing_settings(rules: Vec<TaskRoutingRule>) -> Result<Bootstrap, String> {
+    run_blocking(move || save_routing_settings_blocking(rules)).await
+}
+
+fn save_routing_settings_blocking(rules: Vec<TaskRoutingRule>) -> Result<Bootstrap, String> {
+    validate_routing_rules(&rules)?;
+    let home = tandem_home();
+    let config = read_config(&home);
+    for rule in &rules {
+        if !config
+            .profiles
+            .iter()
+            .any(|profile| profile.id == rule.profile_id)
+        {
+            return Err(format!("Unknown routing profile: {}", rule.profile_id));
+        }
+        for fallback_id in &rule.fallback_profile_ids {
+            if fallback_id == &rule.profile_id {
+                return Err(format!(
+                    "Fallback profile must differ from the primary profile: {fallback_id}"
+                ));
+            }
+            if !config
+                .profiles
+                .iter()
+                .any(|profile| &profile.id == fallback_id)
+            {
+                return Err(format!("Unknown fallback routing profile: {fallback_id}"));
+            }
+        }
+    }
+    let path = home.join("config.json");
+    fs::create_dir_all(&home)
+        .map_err(|error| format!("Could not create Tandem settings folder: {error}"))?;
+    let mut value: Value = match fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map_err(|error| format!("Could not parse Tandem configuration: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fallback_config_value(),
+        Err(error) => return Err(format!("Could not read Tandem configuration: {error}")),
+    };
+    let routing = value
+        .get_mut("routing")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Tandem configuration is missing its routing section.".to_string())?;
+    routing.insert(
+        "taskRules".into(),
+        serde_json::to_value(rules)
+            .map_err(|error| format!("Could not prepare routing settings: {error}"))?,
+    );
+    let contents = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Could not prepare Tandem configuration: {error}"))?;
+    let temporary = home.join("config.json.tmp");
+    fs::write(&temporary, format!("{contents}\n"))
+        .map_err(|error| format!("Could not save routing settings: {error}"))?;
+    fs::rename(&temporary, path)
+        .map_err(|error| format!("Could not finish saving routing settings: {error}"))?;
     desktop_bootstrap_blocking()
 }
 
@@ -303,6 +424,131 @@ fn reveal_connection_log() -> Result<(), String> {
 #[tauri::command]
 async fn desktop_tasks() -> Result<Vec<TaskView>, String> {
     run_blocking(|| Ok(read_tasks(&tandem_home()))).await
+}
+
+#[tauri::command]
+async fn desktop_runs() -> Result<Vec<ExecutionRunView>, String> {
+    run_blocking(|| {
+        let home = tandem_home();
+        let path = home.join("tandem.sqlite");
+        let connection = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("Could not open Tandem's run ledger: {error}"))?;
+        Ok(read_runs_from_connection(&connection))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn desktop_benchmarks(app: tauri::AppHandle) -> Result<Value, String> {
+    run_blocking(move || {
+        let output = run_tandem_command(&app, &["benchmark", "export"])?;
+        serde_json::from_str(&output)
+            .map_err(|error| format!("Could not read Tandem benchmarks: {error}"))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn desktop_benchmark_create(
+    name: String,
+    budget_dollars: f64,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    run_blocking(move || {
+        if name.trim().is_empty() {
+            return Err("Benchmark name cannot be empty.".into());
+        }
+        let budget = budget_dollars.to_string();
+        run_tandem_command(
+            &app,
+            &["benchmark", "create", name.trim(), "--budget", &budget],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn desktop_benchmark_add(
+    benchmark_id: String,
+    variant: String,
+    label: String,
+    task_class: String,
+    difficulty: u8,
+    run_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let difficulty_value = difficulty.to_string();
+        let mut args = vec![
+            "benchmark".to_string(),
+            "add".to_string(),
+            benchmark_id,
+            "--variant".to_string(),
+            variant,
+            "--label".to_string(),
+            label,
+            "--class".to_string(),
+            task_class,
+            "--difficulty".to_string(),
+            difficulty_value,
+        ];
+        if let Some(run_id) = run_id.filter(|value| !value.trim().is_empty()) {
+            args.push("--run".to_string());
+            args.push(run_id);
+        }
+        let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_tandem_command(&app, &refs)?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn desktop_benchmark_score(
+    trial_id: String,
+    accepted: bool,
+    quality_score: f64,
+    wall_time_minutes: f64,
+    human_minutes: f64,
+    revision_count: u32,
+    codex_usage_percent_delta: Option<f64>,
+    claude_usage_percent_delta: Option<f64>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let mut args = vec![
+            "benchmark".to_string(),
+            "score".to_string(),
+            trial_id,
+            "--accepted".to_string(),
+            if accepted { "yes" } else { "no" }.to_string(),
+            "--quality".to_string(),
+            quality_score.to_string(),
+            "--wall-minutes".to_string(),
+            wall_time_minutes.to_string(),
+            "--human-minutes".to_string(),
+            human_minutes.to_string(),
+            "--revisions".to_string(),
+            revision_count.to_string(),
+        ];
+        for (option, value) in [
+            ("--codex-usage", codex_usage_percent_delta),
+            ("--claude-usage", claude_usage_percent_delta),
+        ] {
+            if let Some(value) = value {
+                args.push(option.to_string());
+                args.push(value.to_string());
+            }
+        }
+        let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_tandem_command(&app, &refs)?;
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -722,11 +968,29 @@ fn allowed_local_path(path: &str, project_root: &str) -> Result<PathBuf, String>
         });
     }
     if !allowed {
+        allowed = agent_artifact_roots().iter().any(|root| {
+            root.canonicalize()
+                .ok()
+                .is_some_and(|root| canonical.starts_with(root))
+        });
+    }
+    if !allowed {
         return Err(
-            "Tandem only opens files inside the selected project or a task worktree.".into(),
+            "Tandem only opens files inside the selected project, a task worktree, or an agent's generated output."
+                .into(),
         );
     }
     Ok(canonical)
+}
+
+/// Directories where agents write artifacts they then ask Tandem to open.
+///
+/// Deliberately narrow: these are output-only directories. Never add a
+/// provider home such as `~/.codex` itself, which holds `auth.json`,
+/// `config.toml`, and databases containing conversation history. This
+/// allowlist is what stops an agent talking Tandem into opening those.
+fn agent_artifact_roots() -> Vec<PathBuf> {
+    vec![user_home().join(".codex").join("generated_images")]
 }
 
 fn default_runtime() -> String {
@@ -734,15 +998,199 @@ fn default_runtime() -> String {
 }
 
 fn read_config(home: &Path) -> TandemConfig {
-    let fallback = TandemConfig {
-        runtime: "auto".into(),
-        profiles: vec![],
-        routing: None,
-    };
+    let fallback = fallback_config();
     let Ok(raw) = fs::read_to_string(home.join("config.json")) else {
         return fallback;
     };
-    serde_json::from_str(&raw).unwrap_or(fallback)
+    let mut config: TandemConfig = serde_json::from_str(&raw).unwrap_or(fallback);
+    if !config
+        .profiles
+        .iter()
+        .any(|profile| profile.id == "fallback-freebuff")
+    {
+        config.profiles.push(freebuff_profile());
+    }
+    config
+}
+
+fn freebuff_profile() -> Profile {
+    Profile {
+        id: "fallback-freebuff".into(),
+        role: "utility".into(),
+        provider: "freebuff".into(),
+        transport: "freebuff-cli".into(),
+        command: "freebuff".into(),
+        model: None,
+    }
+}
+
+fn fallback_config() -> TandemConfig {
+    TandemConfig {
+        runtime: "auto".into(),
+        profiles: vec![
+            Profile {
+                id: "outer-primary".into(),
+                role: "outer".into(),
+                provider: "openai".into(),
+                transport: "codex-cli".into(),
+                command: "codex".into(),
+                model: None,
+            },
+            freebuff_profile(),
+            Profile {
+                id: "worker-primary".into(),
+                role: "worker".into(),
+                provider: "anthropic".into(),
+                transport: "claude-cli".into(),
+                command: "claude".into(),
+                model: None,
+            },
+        ],
+        routing: Some(Routing {
+            outer: "outer-primary".into(),
+            worker: "worker-primary".into(),
+            reviewer: None,
+            task_rules: default_routing_rules(),
+        }),
+    }
+}
+
+fn fallback_config_value() -> Value {
+    serde_json::json!({
+        "version": 1,
+        "runtime": "auto",
+        "policy": { "permissionMode": "auto", "ponytailMode": "full" },
+        "profiles": [
+            {
+                "id": "outer-primary",
+                "role": "outer",
+                "provider": "openai",
+                "transport": "codex-cli",
+                "command": "codex",
+                "model": null,
+                "settings": { "search": true, "permissionMode": "auto" }
+            },
+            {
+                "id": "worker-primary",
+                "role": "worker",
+                "provider": "anthropic",
+                "transport": "claude-cli",
+                "command": "claude",
+                "model": null,
+                "settings": { "permissionMode": "auto", "effort": "high" }
+            },
+            {
+                "id": "fallback-freebuff",
+                "role": "utility",
+                "provider": "freebuff",
+                "transport": "freebuff-cli",
+                "command": "freebuff",
+                "model": null,
+                "settings": { "interactiveOnly": true, "fallbackOnly": true }
+            }
+        ],
+        "routing": {
+            "outer": "outer-primary",
+            "worker": "worker-primary",
+            "reviewer": null,
+            "taskRules": []
+        }
+    })
+}
+
+fn default_routing_rules() -> Vec<TaskRoutingRule> {
+    vec![
+        routing_rule("conversation", "outer-primary", None, None, 1),
+        routing_rule("quick", "outer-primary", None, Some("low"), 1),
+        routing_rule("research", "outer-primary", None, Some("high"), 3),
+        routing_rule("architecture", "outer-primary", None, Some("high"), 2),
+        routing_rule("implementation", "worker-primary", None, Some("high"), 3),
+        routing_rule("verification", "outer-primary", None, Some("high"), 2),
+    ]
+}
+
+fn default_fallback_profile_ids() -> Vec<String> {
+    vec!["fallback-freebuff".into()]
+}
+
+fn routing_rule(
+    task_class: &str,
+    profile_id: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    max_concurrency: u8,
+) -> TaskRoutingRule {
+    TaskRoutingRule {
+        task_class: task_class.into(),
+        profile_id: profile_id.into(),
+        fallback_profile_ids: vec!["fallback-freebuff".into()],
+        model: model.map(str::to_string),
+        effort: effort.map(str::to_string),
+        max_concurrency,
+    }
+}
+
+fn routing_rules(config: &TandemConfig) -> Vec<TaskRoutingRule> {
+    let configured = config.routing.as_ref();
+    let rules = configured
+        .map(|routing| routing.task_rules.as_slice())
+        .unwrap_or_default();
+    default_routing_rules()
+        .into_iter()
+        .map(|mut fallback| {
+            if let Some(routing) = configured {
+                // Defaults only. An explicit taskRules entry still wins below.
+                fallback.profile_id = match fallback.task_class.as_str() {
+                    "implementation" => routing.worker.clone(),
+                    // Verification is the cross-provider review step, so it
+                    // follows the configured reviewer when there is one.
+                    "verification" => routing
+                        .reviewer
+                        .clone()
+                        .unwrap_or_else(|| routing.outer.clone()),
+                    _ => routing.outer.clone(),
+                };
+            }
+            rules
+                .iter()
+                .find(|rule| rule.task_class == fallback.task_class)
+                .cloned()
+                .unwrap_or(fallback)
+        })
+        .collect()
+}
+
+fn validate_routing_rules(rules: &[TaskRoutingRule]) -> Result<(), String> {
+    let expected = [
+        "conversation",
+        "quick",
+        "research",
+        "architecture",
+        "implementation",
+        "verification",
+    ];
+    if rules.len() != expected.len() {
+        return Err("Routing settings must include each task category exactly once.".into());
+    }
+    for task_class in expected {
+        if rules
+            .iter()
+            .filter(|rule| rule.task_class == task_class)
+            .count()
+            != 1
+        {
+            return Err(format!(
+                "Routing settings are missing a unique {task_class} rule."
+            ));
+        }
+    }
+    if rules
+        .iter()
+        .any(|rule| rule.max_concurrency == 0 || rule.max_concurrency > 8)
+    {
+        return Err("Routing concurrency must be between 1 and 8.".into());
+    }
+    Ok(())
 }
 
 fn read_desktop_settings(home: &Path) -> DesktopSettings {
@@ -797,13 +1245,13 @@ fn capitalize(value: &str) -> String {
     }
 }
 
-fn read_ledger(home: &Path) -> (Vec<GoalView>, Vec<TaskView>) {
+fn read_ledger(home: &Path) -> (Vec<GoalView>, Vec<TaskView>, Vec<ExecutionRunView>) {
     let path = home.join("tandem.sqlite");
     let Ok(connection) = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ) else {
-        return (vec![], vec![]);
+        return (vec![], vec![], vec![]);
     };
 
     let goals = connection
@@ -827,8 +1275,52 @@ fn read_ledger(home: &Path) -> (Vec<GoalView>, Vec<TaskView>) {
         .unwrap_or_default();
 
     let tasks = read_tasks_from_connection(&connection);
+    let runs = read_runs_from_connection(&connection);
 
-    (goals, tasks)
+    (goals, tasks, runs)
+}
+
+fn read_runs_from_connection(connection: &Connection) -> Vec<ExecutionRunView> {
+    connection
+        .prepare(
+            "SELECT id, goal_id, repo_root, objective, status, source_sha, policy_json,
+                    integration_commit_sha, error, created_at, updated_at
+             FROM execution_groups ORDER BY updated_at DESC LIMIT 50",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| {
+                    let run_id: String = row.get(0)?;
+                    let policy_json: String = row.get(6)?;
+                    let task_ids = connection
+                        .prepare(
+                            "SELECT id FROM tasks WHERE execution_group_id = ?
+                             ORDER BY ordinal ASC, created_at ASC",
+                        )
+                        .and_then(|mut task_statement| {
+                            task_statement
+                                .query_map([&run_id], |task_row| task_row.get::<_, String>(0))?
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Ok(ExecutionRunView {
+                        id: run_id,
+                        goal_id: row.get(1)?,
+                        repo_root: row.get(2)?,
+                        objective: row.get(3)?,
+                        status: row.get(4)?,
+                        source_sha: row.get(5)?,
+                        policy: serde_json::from_str(&policy_json).unwrap_or(Value::Null),
+                        integration_commit_sha: row.get(7)?,
+                        error: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                        task_ids,
+                    })
+                })?
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn read_tasks(home: &Path) -> Vec<TaskView> {
@@ -1218,6 +1710,25 @@ fn child_tree_alive(child_id: u32) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn validates_complete_provider_neutral_routing_matrix() {
+        let mut rules = default_routing_rules();
+        assert!(validate_routing_rules(&rules).is_ok());
+
+        rules[0].max_concurrency = 0;
+        assert_eq!(
+            validate_routing_rules(&rules).unwrap_err(),
+            "Routing concurrency must be between 1 and 8."
+        );
+
+        let mut missing = default_routing_rules();
+        missing.pop();
+        assert_eq!(
+            validate_routing_rules(&missing).unwrap_err(),
+            "Routing settings must include each task category exactly once."
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn terminates_descendant_listener_after_launcher_exits() {
@@ -1233,27 +1744,28 @@ mod tests {
         let mut child = command.spawn().expect("spawn launcher and descendant");
         let endpoint = format!("ws://127.0.0.1:{port}");
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !endpoint_ready(&endpoint) && Instant::now() < deadline {
+        let mut ready = false;
+        while !ready && Instant::now() < deadline {
+            ready = endpoint_ready(&endpoint);
+            if ready {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(25));
         }
-        assert!(
-            endpoint_ready(&endpoint),
-            "descendant listener became ready"
-        );
+        assert!(ready, "descendant listener became ready");
         assert!(
             child.wait().expect("launcher exited").success(),
             "launcher should exit before its descendant"
         );
+        assert!(
+            child_tree_alive(child.id()),
+            "descendant should outlive its launcher before cleanup"
+        );
 
         terminate_child_tree(&mut child);
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while endpoint_ready(&endpoint) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(25));
-        }
         assert!(
-            !endpoint_ready(&endpoint),
-            "descendant listener survived launcher termination"
+            !child_tree_alive(child.id()),
+            "descendant process group survived launcher termination"
         );
     }
 }
@@ -1266,18 +1778,24 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
+            desktop_benchmark_add,
+            desktop_benchmark_create,
+            desktop_benchmark_score,
+            desktop_benchmarks,
             desktop_goal_create,
             desktop_goal_update,
             desktop_task_cancel,
             desktop_task_files,
             desktop_task_steer,
             desktop_tasks,
+            desktop_runs,
             open_local_file,
             open_project_terminal,
             open_provider_login,
             preview_local_file,
             reveal_connection_log,
             save_desktop_settings,
+            save_routing_settings,
             start_codex
         ])
         .build(tauri::generate_context!())

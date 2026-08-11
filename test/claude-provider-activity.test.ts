@@ -46,4 +46,21 @@ describe("Claude provider activity", () => {
       }),
     ]);
   });
+
+  it("retains parent identity for forwarded child-agent activity", () => {
+    expect(
+      extractClaudeActivities({
+        type: "assistant",
+        parent_tool_use_id: "agent-parent-1",
+        message: {
+          content: [{ type: "text", text: "The focused review found one regression risk." }],
+        },
+      })
+    ).toEqual([
+      expect.objectContaining({
+        kind: "progress",
+        parentToolUseId: "agent-parent-1",
+      }),
+    ]);
+  });
 });

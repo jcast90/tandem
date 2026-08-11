@@ -32,6 +32,18 @@ describe("Tandem MCP server", () => {
     try {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
+        "tandem_room_create",
+        "tandem_room_get",
+        "tandem_room_wait",
+        "tandem_room_contribute",
+        "tandem_room_resume",
+        "tandem_room_cancel",
+        "tandem_run_create",
+        "tandem_run_get",
+        "tandem_run_wait",
+        "tandem_run_cancel",
+        "tandem_run_checkpoint",
+        "tandem_run_integrate",
         "tandem_goal_create",
         "tandem_goal_update",
         "tandem_goal_list",
