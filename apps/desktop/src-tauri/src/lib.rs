@@ -574,6 +574,33 @@ async fn desktop_goal_create(
 }
 
 #[tauri::command]
+async fn desktop_conversation_register(
+    outer_thread_id: String,
+    project_root: String,
+    title: String,
+    app: tauri::AppHandle,
+) -> Result<Value, String> {
+    run_blocking(move || {
+        let output = run_tandem_command(
+            &app,
+            &[
+                "conversation",
+                "register",
+                "--thread",
+                &outer_thread_id,
+                "--project",
+                &project_root,
+                "--title",
+                &title,
+            ],
+        )?;
+        serde_json::from_str(&output)
+            .map_err(|error| format!("Could not read registered conversation: {error}"))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn desktop_goal_update(
     goal_id: String,
     status: String,
@@ -1784,6 +1811,7 @@ pub fn run() {
             desktop_benchmarks,
             desktop_goal_create,
             desktop_goal_update,
+            desktop_conversation_register,
             desktop_task_cancel,
             desktop_task_files,
             desktop_task_steer,

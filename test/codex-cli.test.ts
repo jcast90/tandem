@@ -45,4 +45,18 @@ describe("Codex CLI outer permissions", () => {
       expect.arrayContaining(["--add-dir", "/tmp/one", "--add-dir", "/tmp/two"])
     );
   });
+
+  it("resumes the mapped outer thread with Tandem MCP still configured", () => {
+    const profile = DEFAULT_CONFIG.profiles.find((item) => item.id === "outer-primary")!;
+    const args = codexCliArgs(
+      profile,
+      "/tmp/project",
+      "Continue",
+      "/tmp/mcp-server.js",
+      "outer-thread-id"
+    );
+
+    expect(args.slice(-3)).toEqual(["resume", "outer-thread-id", "Continue"]);
+    expect(args.join(" ")).toContain("mcp_servers.tandem.command");
+  });
 });

@@ -18,6 +18,7 @@ import {
   type BenchmarkStatus,
   type BenchmarkTrialRecord,
   type BenchmarkVariant,
+  type ConversationRecord,
   type DeliberationContributionRecord,
   type DeliberationContributionStatus,
   type DeliberationEventRecord,
@@ -45,6 +46,16 @@ interface GoalRow {
   parent_id: string | null;
   objective: string;
   status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ConversationRow {
+  id: string;
+  project_root: string;
+  title: string;
+  outer_profile_id: string;
+  outer_thread_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -211,6 +222,55 @@ export class TandemStore {
 
   close(): void {
     this.db.close();
+  }
+
+  registerConversation(input: {
+    projectRoot: string;
+    title: string;
+    outerProfileId: string;
+    outerThreadId: string;
+  }): ConversationRecord {
+    const existing = this.db
+      .prepare("SELECT * FROM conversations WHERE outer_thread_id = ?")
+      .get(input.outerThreadId) as ConversationRow | undefined;
+    const now = new Date().toISOString();
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE conversations
+           SET project_root = ?, title = ?, outer_profile_id = ?, updated_at = ?
+           WHERE id = ?`
+        )
+        .run(input.projectRoot, input.title, input.outerProfileId, now, existing.id);
+      return this.getConversation(existing.id)!;
+    }
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO conversations
+         (id, project_root, title, outer_profile_id, outer_thread_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(id, input.projectRoot, input.title, input.outerProfileId, input.outerThreadId, now, now);
+    return this.getConversation(id)!;
+  }
+
+  getConversation(idOrPrefix: string): ConversationRecord | null {
+    const exact = this.db.prepare("SELECT * FROM conversations WHERE id = ?").get(idOrPrefix) as
+      ConversationRow | undefined;
+    if (exact) return mapConversation(exact);
+    const matches = this.db
+      .prepare("SELECT * FROM conversations WHERE id LIKE ? LIMIT 2")
+      .all(`${idOrPrefix}%`) as unknown as ConversationRow[];
+    if (matches.length > 1) throw new Error(`Ambiguous conversation id: ${idOrPrefix}`);
+    return matches[0] ? mapConversation(matches[0]) : null;
+  }
+
+  listConversations(limit = 50): ConversationRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?")
+      .all(limit) as unknown as ConversationRow[];
+    return rows.map(mapConversation);
   }
 
   createGoal(objective: string, parentId: string | null = null): GoalRecord {
@@ -1002,6 +1062,16 @@ export class TandemStore {
 
   private migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        project_root TEXT NOT NULL,
+        title TEXT NOT NULL,
+        outer_profile_id TEXT NOT NULL,
+        outer_thread_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS goals (
         id TEXT PRIMARY KEY,
         parent_id TEXT REFERENCES goals(id),
@@ -1264,6 +1334,18 @@ function mapGoal(row: GoalRow): GoalRecord {
     parentId: row.parent_id,
     objective: row.objective,
     status: GoalStatusSchema.parse(row.status),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapConversation(row: ConversationRow): ConversationRecord {
+  return {
+    id: row.id,
+    projectRoot: row.project_root,
+    title: row.title,
+    outerProfileId: row.outer_profile_id,
+    outerThreadId: row.outer_thread_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -249,6 +249,16 @@ export interface GoalRecord {
   updatedAt: string;
 }
 
+export interface ConversationRecord {
+  id: string;
+  projectRoot: string;
+  title: string;
+  outerProfileId: string;
+  outerThreadId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TaskRecord {
   id: string;
   executionGroupId: string | null;

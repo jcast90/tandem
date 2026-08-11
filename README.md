@@ -326,6 +326,23 @@ The same create, wait, contribute, and cancel lifecycle is available to the
 outer conversation through Tandem's MCP tools, so the completed chair synthesis
 can appear as a single response in the chat.
 
+## Resume a Tandem conversation
+
+Tandem assigns its own conversation ID when the desktop starts or opens an outer
+thread. The record lives in `~/.tandem/tandem.sqlite` and maps the Tandem
+conversation to its project and provider thread; provider transcripts remain in
+their native stores rather than being copied.
+
+```bash
+tandem conversation list
+tandem resume <conversation-id>
+tandem resume <conversation-id> "Continue with the Problem Discovery Room"
+```
+
+Short unique ID prefixes are accepted. Resuming restores the original outer
+thread while reattaching Tandem's MCP server, so its rooms, goals, and delegated
+work remain available.
+
 For product research, set `preset` to `problem-discovery`. Tandem fixes the room
 at five rounds and ends with ranked problem cards instead of a product pitch.
 Codex, Claude, and Freebuff each contribute and cast one locked ballot. The

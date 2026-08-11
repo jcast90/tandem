@@ -31046,10 +31046,12 @@ var DeliberationParticipantSchema = external_exports.object({
   profileId: external_exports.string().min(1),
   model: external_exports.string().min(1).nullable().default(null)
 });
+var DeliberationRoomPresetSchema = external_exports.enum(["general", "problem-discovery"]);
 var DeliberationRoomSchema = external_exports.object({
   question: external_exports.string().min(1),
   participants: external_exports.array(DeliberationParticipantSchema).min(2).max(5),
   chairProfileId: external_exports.string().min(1).nullable().default(null),
+  preset: DeliberationRoomPresetSchema.default("general"),
   rounds: external_exports.number().int().min(1).max(5).default(2),
   maxEstimatedTokens: external_exports.number().int().positive().default(12e4),
   preserveDissent: external_exports.boolean().default(true)
@@ -31060,13 +31062,6 @@ var DeliberationRoomSchema = external_exports.object({
       code: external_exports.ZodIssueCode.custom,
       path: ["participants"],
       message: "Deliberation participants must be unique."
-    });
-  }
-  if (room.chairProfileId && !ids.includes(room.chairProfileId)) {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["chairProfileId"],
-      message: "The chair must also be a deliberation participant."
     });
   }
 });
@@ -31448,7 +31443,13 @@ function defaultRulesForConfig(config2) {
 
 // src/deliberation.ts
 function planDeliberation(input, config2) {
-  const room = DeliberationRoomSchema.parse(input);
+  const parsed = DeliberationRoomSchema.parse(input);
+  const room = parsed.preset === "problem-discovery" ? {
+    ...parsed,
+    question: problemDiscoveryQuestion(parsed.question),
+    rounds: 5,
+    preserveDissent: true
+  } : parsed;
   const participants = room.participants.map(
     (participant) => resolveProfile(config2, participant.profileId)
   );
@@ -31471,6 +31472,17 @@ function stageKindForRound(round) {
   return stages[round - 1] ?? "revision";
 }
 function synthesisContract(room) {
+  if (isProblemDiscoveryRoom(room.question)) {
+    return [
+      "Observed problem evidence",
+      "Surviving problem cards",
+      "Search and Google Trends signals",
+      "First-buyer candidates",
+      "Competition and substitutes",
+      "Dissent and unresolved assumptions",
+      "Recommended validation tests"
+    ];
+  }
   return [
     "Shared conclusions",
     "How the idea evolved",
@@ -31481,6 +31493,27 @@ function synthesisContract(room) {
     "Validation steps",
     "Provider-neutral task graph"
   ];
+}
+var PROBLEM_DISCOVERY_MARKER = "<tandem-problem-discovery-v1>";
+function isProblemDiscoveryRoom(question) {
+  return question.includes(PROBLEM_DISCOVERY_MARKER);
+}
+function problemDiscoveryQuestion(question) {
+  if (isProblemDiscoveryRoom(question)) return question;
+  return `${question}
+
+${PROBLEM_DISCOVERY_MARKER}
+This is a Problem Discovery Room. Discover evidence-backed, recurring problems before proposing products. The five rounds are:
+1. Independently surface observed pains, costly workarounds, and behavior changes. Do not propose products.
+2. Cross-examine recurrence, consequence, current workaround or spend, economic buyer, and reachability. Reject unsupported claims.
+3. Collect demand signals: incumbent adoption, complaints, substitutes, communities, search behavior, and market change. Competition is evidence of demand, not automatic disqualification.
+4. Falsify the strongest problem cards: explain why each remains unsolved, what could make it unimportant, and the smallest real-world test that could kill it.
+5. Submit a locked independent ballot ranking at most three problem cards by evidence strength, recurrence, consequence, existing spend, buyer reachability, and timing. Use the problem card's stable title, give a short evidence rationale, calibrated confidence, and decisive missing evidence. Do not react to same-round ballots.
+
+Google Trends is one signal, never the decision. When web access permits, test both problem-language and solution-language queries at trends.google.com/trends/explore. Record the exact query or topic, geography, time range, direction and seasonality, relevant rising queries, comparison baseline, and caveats. Cite the source. Never treat relative search interest as search volume, willingness to pay, or proof of a market. If a signal cannot be verified, label it as a proposed query rather than a finding.
+
+Every listed participant contributes in all five rounds and casts one ballot, including a participant who is also configured as chair. The chair's later synthesis call is only a reporter: it receives no additional vote, introduces no new candidate, and may not change or break the locked tally.
+</tandem-problem-discovery-v1>`;
 }
 
 // src/providers/discussion.ts
@@ -31894,7 +31927,7 @@ var DeliberationRunner = class {
     }
   }
   buildPrompt(room, stage, round, profileId) {
-    const alias = participantAlias(room, profileId);
+    const alias = stage === "synthesis" ? "the chair" : participantAlias(room, profileId);
     const base = `You are ${alias}, a coworker participating in a provider-neutral Tandem deliberation room.
 
 The user's seed idea or question:
@@ -31951,12 +31984,16 @@ ${rendered}
 Produce your revised position after the room's critiques, alternatives, and falsification attempts. Trace how your view evolved from your own opening contribution. Explicitly identify which coworkers' ideas you adopted, rejected, combined, or substantially changed and why. Give a concrete recommendation, calibrated confidence, decisive evidence, unresolved uncertainty, and the strongest remaining dissent. The best conclusion may be far from the seed idea. This is your final contribution before the chair synthesizes; prioritize decision quality over defending your initial answer.`;
     }
     const headings = synthesisContract(roomInput(room));
+    const tallyRules = isProblemDiscoveryRoom(room.question) ? `
+This room's locked ballots are authoritative. Reproduce each anonymous ballot and calculate the result mechanically: first place earns 3 points, second earns 2, and third earns 1. A room-supported candidate must appear on at least two ballots; keep single-ballot candidates as minority proposals. Sort by total points and leave equal totals tied. Your earlier contribution and ballot have exactly the same weight as each coworker's. Do not cast another vote, alter the order, or break a tie in prose.
+` : "";
     return `${base}
 
 Anonymized room contributions:
 ${rendered}
 
 You are the chair. Produce the final standalone synthesis for the user; do not expose providers or internal mechanics. Do not decide by majority vote. Weight claims by evidence, explanatory power, falsifiability, and how well they survived coworker criticism. Show how the seed idea evolved, including meaningful pivots and newly surfaced directions. Preserve meaningful disagreement instead of forcing consensus, and distinguish established knowledge from new hypotheses that require validation.
+${tallyRules}
 
 Use these exact top-level sections:
 ${headings.map((heading) => `## ${heading}`).join("\n")}`;
@@ -31972,6 +32009,7 @@ function roomInput(room) {
     question: room.question,
     participants: room.participants,
     chairProfileId: room.chairProfileId,
+    preset: room.question.includes("<tandem-problem-discovery-v1>") ? "problem-discovery" : "general",
     rounds: room.rounds,
     maxEstimatedTokens: room.maxEstimatedTokens,
     preserveDissent: room.preserveDissent
@@ -32179,6 +32217,36 @@ var TandemStore = class {
   }
   close() {
     this.db.close();
+  }
+  registerConversation(input) {
+    const existing = this.db.prepare("SELECT * FROM conversations WHERE outer_thread_id = ?").get(input.outerThreadId);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    if (existing) {
+      this.db.prepare(
+        `UPDATE conversations
+           SET project_root = ?, title = ?, outer_profile_id = ?, updated_at = ?
+           WHERE id = ?`
+      ).run(input.projectRoot, input.title, input.outerProfileId, now, existing.id);
+      return this.getConversation(existing.id);
+    }
+    const id = randomUUID();
+    this.db.prepare(
+      `INSERT INTO conversations
+         (id, project_root, title, outer_profile_id, outer_thread_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, input.projectRoot, input.title, input.outerProfileId, input.outerThreadId, now, now);
+    return this.getConversation(id);
+  }
+  getConversation(idOrPrefix) {
+    const exact = this.db.prepare("SELECT * FROM conversations WHERE id = ?").get(idOrPrefix);
+    if (exact) return mapConversation(exact);
+    const matches = this.db.prepare("SELECT * FROM conversations WHERE id LIKE ? LIMIT 2").all(`${idOrPrefix}%`);
+    if (matches.length > 1) throw new Error(`Ambiguous conversation id: ${idOrPrefix}`);
+    return matches[0] ? mapConversation(matches[0]) : null;
+  }
+  listConversations(limit = 50) {
+    const rows = this.db.prepare("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?").all(limit);
+    return rows.map(mapConversation);
   }
   createGoal(objective, parentId = null) {
     const id = randomUUID();
@@ -32722,6 +32790,16 @@ var TandemStore = class {
   }
   migrate() {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        project_root TEXT NOT NULL,
+        title TEXT NOT NULL,
+        outer_profile_id TEXT NOT NULL,
+        outer_thread_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS goals (
         id TEXT PRIMARY KEY,
         parent_id TEXT REFERENCES goals(id),
@@ -32975,6 +33053,17 @@ function mapGoal(row) {
     parentId: row.parent_id,
     objective: row.objective,
     status: GoalStatusSchema.parse(row.status),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function mapConversation(row) {
+  return {
+    id: row.id,
+    projectRoot: row.project_root,
+    title: row.title,
+    outerProfileId: row.outer_profile_id,
+    outerThreadId: row.outer_thread_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -33763,6 +33852,17 @@ var TandemService = class {
   close() {
     this.store.close();
   }
+  registerConversation(input) {
+    return this.store.registerConversation(input);
+  }
+  getConversation(id) {
+    const conversation = this.store.getConversation(id);
+    if (!conversation) throw new Error(`Conversation not found: ${id}`);
+    return conversation;
+  }
+  listConversations(limit = 50) {
+    return this.store.listConversations(limit);
+  }
   createGoal(objective, parentId = null) {
     if (parentId && !this.store.getGoal(parentId)) {
       throw new Error(`Parent goal not found: ${parentId}`);
@@ -34218,9 +34318,10 @@ server.registerTool(
   "tandem_room_create",
   {
     title: "Create Tandem discussion room",
-    description: "Start one to five rounds of blind proposals, challenge, reframing, falsification, and revision before a chair synthesis across configured CLI profiles.",
+    description: "Start a general deliberation or five-round Problem Discovery Room before a separate chair synthesis across configured CLI profiles.",
     inputSchema: {
       question: external_exports.string().min(1),
+      preset: external_exports.enum(["general", "problem-discovery"]).optional(),
       participants: external_exports.array(
         external_exports.object({
           profile_id: external_exports.string().min(1),
@@ -34235,6 +34336,7 @@ server.registerTool(
   },
   async ({
     question,
+    preset,
     participants,
     chair_profile_id,
     rounds,
@@ -34244,6 +34346,7 @@ server.registerTool(
     await service.createDeliberationRoom(
       {
         question,
+        preset: preset ?? "general",
         participants: participants.map((participant) => ({
           profileId: participant.profile_id,
           model: participant.model ?? null

@@ -14,6 +14,29 @@ afterEach(async () => {
 });
 
 describe("TandemStore", () => {
+  it("maps a stable Tandem conversation id to one outer-provider thread", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-conversation-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const created = store.registerConversation({
+      projectRoot: "/tmp/project",
+      title: "Problem discovery",
+      outerProfileId: "outer-primary",
+      outerThreadId: "codex-thread-1",
+    });
+    const updated = store.registerConversation({
+      projectRoot: "/tmp/project",
+      title: "Problem discovery room",
+      outerProfileId: "outer-primary",
+      outerThreadId: "codex-thread-1",
+    });
+
+    expect(updated.id).toBe(created.id);
+    expect(store.getConversation(created.id.slice(0, 8))?.title).toBe("Problem discovery room");
+    expect(store.listConversations()).toHaveLength(1);
+    store.close();
+  });
+
   it("persists nested goals, tasks, transitions, reports, and ordered events", async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-store-"));
     cleanup.push(root);
@@ -72,7 +95,7 @@ describe("TandemStore", () => {
       "task.queued",
       "worker.started",
     ]);
-    expect(store.listGoals()[0]?.parentId).toBe(parent.id);
+    expect(store.listGoals().find((goal) => goal.id === child.id)?.parentId).toBe(parent.id);
     expect(store.updateGoalStatus(child.id, "complete").status).toBe("complete");
     store.close();
   });

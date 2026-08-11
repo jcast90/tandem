@@ -36,7 +36,12 @@ export class CodexCliOuterAdapter implements OuterAdapter {
     };
   }
 
-  async launch(profile: Profile, projectRoot: string, prompt?: string): Promise<number> {
+  async launch(
+    profile: Profile,
+    projectRoot: string,
+    prompt?: string,
+    sessionId?: string
+  ): Promise<number> {
     const executable = findExecutable(profile.command);
     if (!executable) throw new Error(`Codex CLI not found: ${profile.command}`);
 
@@ -44,7 +49,8 @@ export class CodexCliOuterAdapter implements OuterAdapter {
       profile,
       projectRoot,
       prompt,
-      join(packageRoot(), "dist", "mcp-server.js")
+      join(packageRoot(), "dist", "mcp-server.js"),
+      sessionId
     );
 
     const child = spawn(executable, args, {
@@ -70,7 +76,8 @@ export function codexCliArgs(
   profile: Profile,
   projectRoot: string,
   prompt: string | undefined,
-  mcpEntry: string
+  mcpEntry: string,
+  sessionId?: string
 ): string[] {
   const args = [
     "-C",
@@ -95,6 +102,7 @@ export function codexCliArgs(
   }
   if (profile.model) args.push("--model", profile.model);
   if (profile.settings.search === true) args.push("--search");
+  if (sessionId) args.push("resume", sessionId);
   if (prompt) args.push(prompt);
   return args;
 }
