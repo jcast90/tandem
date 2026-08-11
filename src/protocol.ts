@@ -58,12 +58,16 @@ export const DeliberationParticipantSchema = z.object({
 });
 export type DeliberationParticipant = z.infer<typeof DeliberationParticipantSchema>;
 
+export const DeliberationRoomPresetSchema = z.enum(["general", "problem-discovery"]);
+export type DeliberationRoomPreset = z.infer<typeof DeliberationRoomPresetSchema>;
+
 export const DeliberationRoomSchema = z
   .object({
     question: z.string().min(1),
     participants: z.array(DeliberationParticipantSchema).min(2).max(5),
     chairProfileId: z.string().min(1).nullable().default(null),
-    rounds: z.number().int().min(1).max(3).default(2),
+    preset: DeliberationRoomPresetSchema.default("general"),
+    rounds: z.number().int().min(1).max(5).default(2),
     maxEstimatedTokens: z.number().int().positive().default(120_000),
     preserveDissent: z.boolean().default(true),
   })
@@ -74,13 +78,6 @@ export const DeliberationRoomSchema = z
         code: z.ZodIssueCode.custom,
         path: ["participants"],
         message: "Deliberation participants must be unique.",
-      });
-    }
-    if (room.chairProfileId && !ids.includes(room.chairProfileId)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["chairProfileId"],
-        message: "The chair must also be a deliberation participant.",
       });
     }
   });
@@ -96,7 +93,14 @@ export const DeliberationStatusSchema = z.enum([
 ]);
 export type DeliberationStatus = z.infer<typeof DeliberationStatusSchema>;
 
-export const DeliberationStageKindSchema = z.enum(["independent", "critique", "synthesis"]);
+export const DeliberationStageKindSchema = z.enum([
+  "independent",
+  "critique",
+  "reframe",
+  "falsification",
+  "revision",
+  "synthesis",
+]);
 export type DeliberationStageKind = z.infer<typeof DeliberationStageKindSchema>;
 
 export const DeliberationContributionStatusSchema = z.enum([
@@ -241,6 +245,16 @@ export interface GoalRecord {
   parentId: string | null;
   objective: string;
   status: GoalStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationRecord {
+  id: string;
+  projectRoot: string;
+  title: string;
+  outerProfileId: string;
+  outerThreadId: string;
   createdAt: string;
   updatedAt: string;
 }

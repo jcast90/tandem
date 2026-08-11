@@ -18,6 +18,7 @@ import {
   type BenchmarkTrialResult,
   type BenchmarkVariant,
   type BenchmarkVariantSummary,
+  type ConversationRecord,
   type DeliberationContributionRecord,
   type DeliberationEventRecord,
   type DeliberationRoomRecord,
@@ -60,6 +61,25 @@ export class TandemService {
 
   close(): void {
     this.store.close();
+  }
+
+  registerConversation(input: {
+    projectRoot: string;
+    title: string;
+    outerProfileId: string;
+    outerThreadId: string;
+  }): ConversationRecord {
+    return this.store.registerConversation(input);
+  }
+
+  getConversation(id: string): ConversationRecord {
+    const conversation = this.store.getConversation(id);
+    if (!conversation) throw new Error(`Conversation not found: ${id}`);
+    return conversation;
+  }
+
+  listConversations(limit = 50): ConversationRecord[] {
+    return this.store.listConversations(limit);
   }
 
   createGoal(objective: string, parentId: string | null = null): GoalRecord {

@@ -857,6 +857,11 @@ export function App() {
     setNotice("");
     try {
       const resumed = await connection.resumeThread(thread.id);
+      await invoke("desktop_conversation_register", {
+        outerThreadId: resumed.id,
+        projectRoot: resumed.cwd,
+        title: threadDisplayName(resumed),
+      });
       setActiveThread(resumed);
       setMessages(messagesFromThread(resumed));
       setActivities(activitiesFromThread(resumed));
@@ -1058,6 +1063,11 @@ export function App() {
           return;
         }
         thread = { ...thread, preview: thread.preview || text };
+        await invoke("desktop_conversation_register", {
+          outerThreadId: thread.id,
+          projectRoot: thread.cwd,
+          title: threadDisplayName(thread),
+        });
         setActiveThread(thread);
         setThreads((current) => [thread!, ...current]);
       }

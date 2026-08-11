@@ -23,5 +23,10 @@ export interface WorkerAdapter {
 export interface OuterAdapter {
   readonly transport: Profile["transport"];
   probe(profile: Profile): Promise<ModelCapabilities>;
-  launch(profile: Profile, projectRoot: string, prompt?: string): Promise<number>;
+  launch(
+    profile: Profile,
+    projectRoot: string,
+    prompt?: string,
+    sessionId?: string
+  ): Promise<number>;
 }

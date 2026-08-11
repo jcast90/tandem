@@ -24,9 +24,10 @@ server.registerTool(
   {
     title: "Create Tandem discussion room",
     description:
-      "Start blind independent responses, anonymized critique rounds, and a chair synthesis across configured CLI profiles.",
+      "Start a general deliberation or five-round Problem Discovery Room before a separate chair synthesis across configured CLI profiles.",
     inputSchema: {
       question: z.string().min(1),
+      preset: z.enum(["general", "problem-discovery"]).optional(),
       participants: z
         .array(
           z.object({
@@ -37,13 +38,14 @@ server.registerTool(
         .min(2)
         .max(5),
       chair_profile_id: z.string().min(1).optional(),
-      rounds: z.number().int().min(1).max(3).optional(),
+      rounds: z.number().int().min(1).max(5).optional(),
       max_estimated_tokens: z.number().int().positive().optional(),
       preserve_dissent: z.boolean().optional(),
     },
   },
   async ({
     question,
+    preset,
     participants,
     chair_profile_id,
     rounds,
@@ -54,6 +56,7 @@ server.registerTool(
       await service.createDeliberationRoom(
         {
           question,
+          preset: preset ?? "general",
           participants: participants.map((participant) => ({
             profileId: participant.profile_id,
             model: participant.model ?? null,
