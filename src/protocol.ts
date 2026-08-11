@@ -117,7 +117,7 @@ export const TandemConfigSchema = z.object({
       permissionMode: PermissionModeSchema.default("auto"),
       ponytailMode: PonytailModeSchema.default("full"),
     })
-    .default({}),
+    .prefault({}),
   profiles: z.array(ProfileSchema).min(2),
   routing: z.object({
     outer: z.string().min(1),
@@ -207,7 +207,7 @@ export type ExecutionTaskSpec = z.infer<typeof ExecutionTaskSpecSchema>;
 export const ExecutionPlanSchema = z.object({
   objective: z.string().min(1),
   goalId: z.string().min(1).nullable().default(null),
-  policy: ExecutionPolicySchema.default({}),
+  policy: ExecutionPolicySchema.prefault({}),
   tasks: z.array(ExecutionTaskSpecSchema).min(1).max(32),
 });
 export type ExecutionPlan = z.infer<typeof ExecutionPlanSchema>;
