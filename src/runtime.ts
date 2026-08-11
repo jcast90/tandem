@@ -1,6 +1,6 @@
 import { closeSync, openSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 import type { Runtime, TaskRecord } from "./protocol.js";
@@ -10,6 +10,12 @@ import { logsDir, packageRoot, tandemHome } from "./paths.js";
 export interface RuntimeLaunch {
   runtime: Exclude<Runtime, "auto">;
   runtimeRef: string;
+}
+
+export function defaultRunnerEntry(argvEntry = process.argv[1]): string {
+  return argvEntry && !argvEntry.endsWith(".ts")
+    ? resolve(argvEntry)
+    : join(packageRoot(), "dist", "cli.js");
 }
 
 const CMUX_CANDIDATES = [
@@ -50,7 +56,7 @@ export async function selectRuntime(
 
 export async function launchWorker(task: TaskRecord, requested: Runtime): Promise<RuntimeLaunch> {
   const selected = await selectRuntime(requested);
-  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? join(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "worker-run", task.id];
   const runnerEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -131,9 +137,7 @@ export async function launchWorker(task: TaskRecord, requested: Runtime): Promis
 
 export async function launchExecutionScheduler(runId: string): Promise<string> {
   const runnerEntry =
-    process.env.TANDEM_SCHEDULER_ENTRY ??
-    process.env.TANDEM_WORKER_ENTRY ??
-    join(packageRoot(), "dist", "cli.js");
+    process.env.TANDEM_SCHEDULER_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "scheduler-run", runId];
   await mkdir(logsDir(), { recursive: true });
   const logPath = join(logsDir(), `${runId}.scheduler.log`);
@@ -151,9 +155,7 @@ export async function launchExecutionScheduler(runId: string): Promise<string> {
 
 export async function launchDeliberationRunner(roomId: string): Promise<string> {
   const runnerEntry =
-    process.env.TANDEM_ROOM_ENTRY ??
-    process.env.TANDEM_WORKER_ENTRY ??
-    join(packageRoot(), "dist", "cli.js");
+    process.env.TANDEM_ROOM_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "room-run", roomId];
   await mkdir(logsDir(), { recursive: true });
   const logPath = join(logsDir(), `${roomId}.room.log`);

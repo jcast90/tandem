@@ -9,7 +9,7 @@ var __export = (target, all) => {
 import { createInterface as createInterface2 } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { readFile as readFile3 } from "node:fs/promises";
-import { resolve as resolve3 } from "node:path";
+import { resolve as resolve4 } from "node:path";
 
 // src/config.ts
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -15042,7 +15042,7 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join as join2 } from "node:path";
 import { spawn } from "node:child_process";
 async function runCommand(command2, args2, options = {}) {
-  return await new Promise((resolve4, reject) => {
+  return await new Promise((resolve5, reject) => {
     const child = spawn(command2, args2, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -15071,7 +15071,7 @@ async function runCommand(command2, args2, options = {}) {
         reject(new Error(`Command timed out: ${command2}`));
         return;
       }
-      resolve4({ stdout, stderr, exitCode: code ?? 1 });
+      resolve5({ stdout, stderr, exitCode: code ?? 1 });
     });
     if (options.stdin !== void 0) {
       child.stdin.end(options.stdin);
@@ -15200,9 +15200,9 @@ var ClaudeCliWorkerAdapter = class {
       process.stderr.write(text);
       writeTail = writeTail.then(() => appendFile(streamLog, text));
     });
-    const exitCode = await new Promise((resolve4, reject) => {
+    const exitCode = await new Promise((resolve5, reject) => {
       child.on("error", reject);
-      child.on("close", (code) => resolve4(code ?? 1));
+      child.on("close", (code) => resolve5(code ?? 1));
     });
     await writeTail;
     this.child = null;
@@ -15464,9 +15464,9 @@ var CodexCliOuterAdapter = class {
       },
       stdio: "inherit"
     });
-    return await new Promise((resolve4, reject) => {
+    return await new Promise((resolve5, reject) => {
       child.on("error", reject);
-      child.on("close", (code) => resolve4(code ?? 1));
+      child.on("close", (code) => resolve5(code ?? 1));
     });
   }
 };
@@ -15574,8 +15574,11 @@ function createWorkerAdapter(profile) {
 // src/runtime.ts
 import { closeSync, openSync } from "node:fs";
 import { mkdir as mkdir3 } from "node:fs/promises";
-import { join as join5 } from "node:path";
+import { join as join5, resolve as resolve2 } from "node:path";
 import { spawn as spawn5 } from "node:child_process";
+function defaultRunnerEntry(argvEntry = process.argv[1]) {
+  return argvEntry && !argvEntry.endsWith(".ts") ? resolve2(argvEntry) : join5(packageRoot(), "dist", "cli.js");
+}
 var CMUX_CANDIDATES = [
   "/Applications/cmux.app/Contents/Resources/bin/cmux",
   "/Applications/cmux.app/Contents/MacOS/cmux"
@@ -15607,7 +15610,7 @@ async function selectRuntime(requested) {
 }
 async function launchWorker(task, requested) {
   const selected = await selectRuntime(requested);
-  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? join5(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "worker-run", task.id];
   const runnerEnv = {
     ...process.env,
@@ -15681,7 +15684,7 @@ async function launchWorker(task, requested) {
   return { runtime: "process", runtimeRef: String(child.pid ?? "") };
 }
 async function launchExecutionScheduler(runId) {
-  const runnerEntry = process.env.TANDEM_SCHEDULER_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? join5(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_SCHEDULER_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "scheduler-run", runId];
   await mkdir3(logsDir(), { recursive: true });
   const logPath = join5(logsDir(), `${runId}.scheduler.log`);
@@ -15697,7 +15700,7 @@ async function launchExecutionScheduler(runId) {
   return String(child.pid ?? "");
 }
 async function launchDeliberationRunner(roomId) {
-  const runnerEntry = process.env.TANDEM_ROOM_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? join5(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_ROOM_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "room-run", roomId];
   await mkdir3(logsDir(), { recursive: true });
   const logPath = join5(logsDir(), `${roomId}.room.log`);
@@ -16694,13 +16697,13 @@ function mapDeliberationEvent(row) {
 // src/workspace.ts
 import { createHash } from "node:crypto";
 import { mkdir as mkdir4 } from "node:fs/promises";
-import { basename, join as join6, resolve as resolve2 } from "node:path";
+import { basename, join as join6, resolve as resolve3 } from "node:path";
 async function repositorySnapshot(cwd) {
   const rootResult = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd });
   if (rootResult.exitCode !== 0) {
     throw new Error("Tandem workers currently require a Git repository.");
   }
-  const repoRoot = resolve2(rootResult.stdout.trim());
+  const repoRoot = resolve3(rootResult.stdout.trim());
   const status2 = await runCommand("git", ["status", "--porcelain"], { cwd: repoRoot });
   if (status2.exitCode !== 0) {
     throw new Error(status2.stderr || "Unable to inspect repository status.");
@@ -17114,7 +17117,7 @@ var ExecutionScheduler = class {
       if (events.length > 0 || TERMINAL_RUN_STATUSES.has(snapshot.run.status) || Date.now() >= deadline) {
         return { ...snapshot, events };
       }
-      await new Promise((resolve4) => setTimeout(resolve4, 400));
+      await new Promise((resolve5) => setTimeout(resolve5, 400));
     }
   }
   async integrate(runId) {
@@ -17271,7 +17274,7 @@ async function runExecutionScheduler(runId) {
       const snapshot = await scheduler.reconcile(runId);
       if (TERMINAL_RUN_STATUSES.has(snapshot.run.status))
         return snapshot.run.status === "failed" ? 1 : 0;
-      await new Promise((resolve4) => setTimeout(resolve4, 750));
+      await new Promise((resolve5) => setTimeout(resolve5, 750));
     }
   } finally {
     store.close();
@@ -18106,7 +18109,7 @@ var TandemService = class {
       if (snapshot.events.length > 0 || ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) || Date.now() >= deadline) {
         return snapshot;
       }
-      await new Promise((resolve4) => setTimeout(resolve4, 300));
+      await new Promise((resolve5) => setTimeout(resolve5, 300));
     }
   }
   async resumeDeliberationRoom(roomId) {
@@ -18250,7 +18253,7 @@ var TandemService = class {
       if (events.length > 0 || TERMINAL_TASK_STATUSES.has(task.status) || Date.now() >= deadline) {
         return { task, events };
       }
-      await new Promise((resolve4) => setTimeout(resolve4, 300));
+      await new Promise((resolve5) => setTimeout(resolve5, 300));
     }
   }
   cancelTask(taskId) {
@@ -18667,6 +18670,33 @@ async function notifyCmux(title, body) {
   }).catch(() => void 0);
 }
 
+// src/updater.ts
+import { spawn as spawn6 } from "node:child_process";
+import { mkdtemp as mkdtemp2, rm as rm2 } from "node:fs/promises";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join8 } from "node:path";
+var RELEASE_INSTALLER_URL = "https://github.com/jcast90/tandem/releases/latest/download/install.sh";
+async function installLatestRelease(installerUrl = RELEASE_INSTALLER_URL) {
+  const curl = findExecutable("curl");
+  if (!curl) throw new Error("curl is required to update Tandem.");
+  const directory = await mkdtemp2(join8(tmpdir2(), "tandem-update-"));
+  const installer = join8(directory, "install.sh");
+  try {
+    const download = await runCommand(curl, ["-fsSL", installerUrl, "-o", installer]);
+    if (download.exitCode !== 0) {
+      throw new Error(download.stderr.trim() || "Unable to download the Tandem installer.");
+    }
+    const exitCode = await new Promise((resolve5, reject) => {
+      const child = spawn6("bash", [installer], { env: process.env, stdio: "inherit" });
+      child.on("error", reject);
+      child.on("close", (code) => resolve5(code ?? 1));
+    });
+    if (exitCode !== 0) throw new Error(`Installer exited with status ${exitCode}.`);
+  } finally {
+    await rm2(directory, { recursive: true, force: true });
+  }
+}
+
 // src/cli.ts
 var args = process.argv.slice(2);
 var command = args.shift() ?? "help";
@@ -18686,6 +18716,9 @@ try {
       break;
     case "resume":
       await resumeConversation(args);
+      break;
+    case "update":
+      await installLatestRelease();
       break;
     case "permissions":
       await permissionsCommand(args);
@@ -18908,8 +18941,8 @@ async function chat(rawArgs) {
   const modelIndex = rawArgs.indexOf("--model");
   const permissionIndex = rawArgs.indexOf("--permissions");
   const ponytailIndex = rawArgs.indexOf("--ponytail");
-  const additionalDirectories = optionValues(rawArgs, "--add-dir").map((path) => resolve3(path));
-  const projectRoot = cdIndex >= 0 ? resolve3(requireArg(rawArgs, cdIndex + 1, "directory after --cd")) : process.cwd();
+  const additionalDirectories = optionValues(rawArgs, "--add-dir").map((path) => resolve4(path));
+  const projectRoot = cdIndex >= 0 ? resolve4(requireArg(rawArgs, cdIndex + 1, "directory after --cd")) : process.cwd();
   if (modelIndex >= 0) {
     profile.model = requireArg(rawArgs, modelIndex + 1, "model after --model");
   }
@@ -18953,7 +18986,7 @@ async function conversationCommand(rawArgs) {
   try {
     if (subcommand === "register") {
       const conversation = service.registerConversation({
-        projectRoot: resolve3(requireOption(rawArgs, "--project", "project root")),
+        projectRoot: resolve4(requireOption(rawArgs, "--project", "project root")),
         title: requireOption(rawArgs, "--title", "conversation title"),
         outerProfileId: optionValue(rawArgs, "--profile") ?? "outer-primary",
         outerThreadId: requireOption(rawArgs, "--thread", "outer thread id")
@@ -19176,7 +19209,7 @@ async function roomCommand(rawArgs) {
       const definition = await loadRoomDefinition(rawArgs);
       const cd = optionValue(rawArgs, "--cd");
       printRoomSnapshot(
-        await service.createDeliberationRoom(definition, cd ? resolve3(cd) : process.cwd())
+        await service.createDeliberationRoom(definition, cd ? resolve4(cd) : process.cwd())
       );
       return;
     }
@@ -19195,7 +19228,7 @@ async function roomCommand(rawArgs) {
     if (subcommand === "contribute") {
       const roomId = requireArg(rawArgs, 0, "room id");
       const profileId = requireOption(rawArgs, "--profile", "profile id");
-      const file2 = resolve3(requireOption(rawArgs, "--file", "contribution file"));
+      const file2 = resolve4(requireOption(rawArgs, "--file", "contribution file"));
       printRoomSnapshot(
         await service.contributeToDeliberationRoom(roomId, profileId, await readFile3(file2, "utf8"))
       );
@@ -19215,7 +19248,7 @@ async function roomCommand(rawArgs) {
   }
 }
 async function loadRoomDefinition(values) {
-  const file2 = resolve3(requireOption(values, "--file", "room definition"));
+  const file2 = resolve4(requireOption(values, "--file", "room definition"));
   const definition = JSON.parse(await readFile3(file2, "utf8"));
   const roundsValue = optionValue(values, "--rounds");
   if (roundsValue === void 0) return definition;
@@ -19331,8 +19364,8 @@ async function runCommandGroup(rawArgs) {
       if (fileIndex < 0)
         throw new Error("Usage: tandem run start --file <plan.json> [--cd <repo>]");
       const file2 = requireArg(rawArgs, fileIndex + 1, "plan file after --file");
-      const projectRoot = cdIndex >= 0 ? resolve3(requireArg(rawArgs, cdIndex + 1, "directory after --cd")) : process.cwd();
-      const plan = JSON.parse(await readFile3(resolve3(file2), "utf8"));
+      const projectRoot = cdIndex >= 0 ? resolve4(requireArg(rawArgs, cdIndex + 1, "directory after --cd")) : process.cwd();
+      const plan = JSON.parse(await readFile3(resolve4(file2), "utf8"));
       const snapshot = await service.createExecutionRun(plan, projectRoot);
       const benchmarkId = optionValue(rawArgs, "--benchmark");
       if (benchmarkId) {
@@ -19667,7 +19700,7 @@ async function selectPermissionMode(initial) {
   input.setEncoding("utf8");
   render();
   try {
-    return await new Promise((resolve4, reject) => {
+    return await new Promise((resolve5, reject) => {
       const onData = (key) => {
         if (key === "" || key === "\x1B") {
           cleanup();
@@ -19681,7 +19714,7 @@ async function selectPermissionMode(initial) {
         }
         if (key === "\r" || key === "\n") {
           cleanup();
-          resolve4(selected);
+          resolve5(selected);
         }
       };
       const cleanup = () => {
@@ -19818,6 +19851,7 @@ Usage:
   tandem conversation list
   tandem conversation show <conversation-id>
   tandem resume <conversation-id> [prompt]
+  tandem update
   tandem permissions [ask|auto|full]
   tandem ponytail status
   tandem ponytail install

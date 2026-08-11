@@ -2983,7 +2983,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve3.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -3010,7 +3010,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve3(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3641,7 +3641,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve3(baseURI, relativeURI, options) {
+    function resolve4(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const { parsed: baseParsed, malformedAuthorityOrPort: baseMalformed } = parseWithStatus(baseURI, schemelessOptions);
       const { parsed: relativeParsed, malformedAuthorityOrPort: relativeMalformed } = parseWithStatus(relativeURI, schemelessOptions);
@@ -3925,7 +3925,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve3,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -28872,7 +28872,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error51) {
@@ -28889,7 +28889,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const earlyReject = (error51) => {
         reject(error51);
       };
@@ -28967,7 +28967,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve3(parseResult.data);
+            resolve4(parseResult.data);
           }
         } catch (error51) {
           reject(error51);
@@ -29228,12 +29228,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve3, interval);
+      const timeoutId = setTimeout(resolve4, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -30324,7 +30324,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+      await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -30988,12 +30988,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve3();
+        resolve4();
       } else {
-        this._stdout.once("drain", resolve3);
+        this._stdout.once("drain", resolve4);
       }
     });
   }
@@ -31526,7 +31526,7 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join as join2 } from "node:path";
 import { spawn } from "node:child_process";
 async function runCommand(command, args, options = {}) {
-  return await new Promise((resolve3, reject) => {
+  return await new Promise((resolve4, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -31555,7 +31555,7 @@ async function runCommand(command, args, options = {}) {
         reject(new Error(`Command timed out: ${command}`));
         return;
       }
-      resolve3({ stdout, stderr, exitCode: code ?? 1 });
+      resolve4({ stdout, stderr, exitCode: code ?? 1 });
     });
     if (options.stdin !== void 0) {
       child.stdin.end(options.stdin);
@@ -32058,8 +32058,11 @@ function reportedTokens(usage) {
 // src/runtime.ts
 import { closeSync, openSync } from "node:fs";
 import { mkdir as mkdir2 } from "node:fs/promises";
-import { join as join4 } from "node:path";
+import { join as join4, resolve as resolve2 } from "node:path";
 import { spawn as spawn2 } from "node:child_process";
+function defaultRunnerEntry(argvEntry = process.argv[1]) {
+  return argvEntry && !argvEntry.endsWith(".ts") ? resolve2(argvEntry) : join4(packageRoot(), "dist", "cli.js");
+}
 var CMUX_CANDIDATES = [
   "/Applications/cmux.app/Contents/Resources/bin/cmux",
   "/Applications/cmux.app/Contents/MacOS/cmux"
@@ -32091,7 +32094,7 @@ async function selectRuntime(requested) {
 }
 async function launchWorker(task, requested) {
   const selected = await selectRuntime(requested);
-  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? join4(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "worker-run", task.id];
   const runnerEnv = {
     ...process.env,
@@ -32165,7 +32168,7 @@ async function launchWorker(task, requested) {
   return { runtime: "process", runtimeRef: String(child.pid ?? "") };
 }
 async function launchExecutionScheduler(runId) {
-  const runnerEntry = process.env.TANDEM_SCHEDULER_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? join4(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_SCHEDULER_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "scheduler-run", runId];
   await mkdir2(logsDir(), { recursive: true });
   const logPath = join4(logsDir(), `${runId}.scheduler.log`);
@@ -32181,7 +32184,7 @@ async function launchExecutionScheduler(runId) {
   return String(child.pid ?? "");
 }
 async function launchDeliberationRunner(roomId) {
-  const runnerEntry = process.env.TANDEM_ROOM_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? join4(packageRoot(), "dist", "cli.js");
+  const runnerEntry = process.env.TANDEM_ROOM_ENTRY ?? process.env.TANDEM_WORKER_ENTRY ?? defaultRunnerEntry();
   const runnerArgs = [runnerEntry, "room-run", roomId];
   await mkdir2(logsDir(), { recursive: true });
   const logPath = join4(logsDir(), `${roomId}.room.log`);
@@ -33178,13 +33181,13 @@ function mapDeliberationEvent(row) {
 // src/workspace.ts
 import { createHash } from "node:crypto";
 import { mkdir as mkdir3 } from "node:fs/promises";
-import { basename, join as join5, resolve as resolve2 } from "node:path";
+import { basename, join as join5, resolve as resolve3 } from "node:path";
 async function repositorySnapshot(cwd) {
   const rootResult = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd });
   if (rootResult.exitCode !== 0) {
     throw new Error("Tandem workers currently require a Git repository.");
   }
-  const repoRoot = resolve2(rootResult.stdout.trim());
+  const repoRoot = resolve3(rootResult.stdout.trim());
   const status = await runCommand("git", ["status", "--porcelain"], { cwd: repoRoot });
   if (status.exitCode !== 0) {
     throw new Error(status.stderr || "Unable to inspect repository status.");
@@ -33536,7 +33539,7 @@ var ExecutionScheduler = class {
       if (events.length > 0 || TERMINAL_RUN_STATUSES.has(snapshot.run.status) || Date.now() >= deadline) {
         return { ...snapshot, events };
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 400));
+      await new Promise((resolve4) => setTimeout(resolve4, 400));
     }
   }
   async integrate(runId) {
@@ -33991,7 +33994,7 @@ var TandemService = class {
       if (snapshot.events.length > 0 || ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) || Date.now() >= deadline) {
         return snapshot;
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 300));
+      await new Promise((resolve4) => setTimeout(resolve4, 300));
     }
   }
   async resumeDeliberationRoom(roomId) {
@@ -34135,7 +34138,7 @@ var TandemService = class {
       if (events.length > 0 || TERMINAL_TASK_STATUSES.has(task.status) || Date.now() >= deadline) {
         return { task, events };
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 300));
+      await new Promise((resolve4) => setTimeout(resolve4, 300));
     }
   }
   cancelTask(taskId) {

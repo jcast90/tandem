@@ -1,13 +1,12 @@
 # Installation
 
-This guide covers the Tandem CLI, provider authentication, and building the
-desktop app from source. Tandem currently ships as source: downloadable desktop
-release artifacts and package-registry installation are not published yet.
+This guide covers the Tandem release installer, provider authentication, and
+contributor builds from source.
 
 ## Supported environments
 
 - **CLI installer:** macOS, Linux, and Windows through WSL
-- **Desktop app:** macOS 12 or newer, built locally from source
+- **Desktop app:** macOS 12 or newer
 - **Node.js:** 22.13 or newer
 - **Git:** required for isolated worker worktrees
 
@@ -54,30 +53,29 @@ claude --version
 claude doctor
 ```
 
-## Install Tandem with the source installer
+## Install Tandem
 
 ```bash
-git clone https://github.com/jcast90/tandem.git
-cd tandem
-./scripts/install.sh
+curl -fsSL https://github.com/jcast90/tandem/releases/latest/download/install.sh | bash
 ```
 
 The installer:
 
-1. checks Git and Node.js versions;
-2. selects an installed pnpm, Corepack, or an isolated pnpm through `npx`;
-3. installs the exact locked dependencies;
-4. builds the TypeScript CLI;
-5. links `tandem` into `~/.local/bin`.
+1. checks Node.js 22.13 or newer;
+2. downloads the latest standalone CLI and universal macOS desktop release;
+3. verifies each artifact's SHA-256 checksum;
+4. verifies the desktop app's Apple signature and notarization;
+5. atomically replaces the existing CLI and desktop app.
 
-It does not modify your shell profile, provider configuration, or subscription
-credentials. It also avoids `pnpm link --global`, so a global pnpm directory is
-not required.
+It preserves `~/.tandem`, provider configuration, and subscription credentials.
+An existing Tandem command is upgraded in place; otherwise the CLI is installed
+under `~/.local/bin`.
 
 To choose a different executable directory:
 
 ```bash
-TANDEM_INSTALL_BIN="$HOME/bin" ./scripts/install.sh
+curl -fsSL https://github.com/jcast90/tandem/releases/latest/download/install.sh | \
+  TANDEM_INSTALL_BIN="$HOME/bin" bash
 ```
 
 If the selected directory is not on `PATH`, add it to your shell profile. For
@@ -87,7 +85,10 @@ zsh, the default installation uses:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Open a new terminal and complete setup:
+The default macOS installation also installs `Tandem.app` under `/Applications`,
+or `~/Applications` when the system Applications directory is not writable.
+
+Open a new terminal if the installer changed `PATH`, then complete setup:
 
 ```bash
 tandem setup
@@ -96,6 +97,17 @@ tandem doctor
 
 `tandem doctor` should report resolved Codex and Claude executable paths and
 their authentication state before you start real work.
+
+## Contributor source installation
+
+The source installer remains available for contributors. It links the CLI to
+the current checkout and does not install the desktop app:
+
+```bash
+git clone https://github.com/jcast90/tandem.git
+cd tandem
+./scripts/install.sh
+```
 
 ## Run without installing a launcher
 
@@ -160,26 +172,38 @@ state.
 
 ## Update
 
-Tandem does not yet have an automatic updater. Update the source checkout and
-rerun the installer:
-
 ```bash
-cd /path/to/tandem
-git pull --ff-only
-./scripts/install.sh
+tandem update
 ```
 
-Review release notes before updating once versioned releases are available.
+The updater downloads and executes the same release installer used for a clean
+installation, so CLI and desktop versions stay aligned.
+
+## Publishing a release
+
+Push a version tag matching the versions in `package.json`,
+`apps/desktop/package.json`, and `apps/desktop/src-tauri/tauri.conf.json`:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow requires `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`
+repository secrets. It will not publish an unsigned or unnotarized macOS app.
 
 ## Uninstall
 
-From the same checkout used to install Tandem:
+Remove the installed CLI and desktop app. Tandem's state is intentionally
+preserved:
 
 ```bash
-./scripts/uninstall.sh
+rm -- "$(command -v tandem)"
+rm -rf -- /Applications/Tandem.app "$HOME/Applications/Tandem.app"
 ```
 
-The uninstaller removes only the launcher linked to that checkout. It preserves
-`~/.tandem`, which contains configuration, task history, logs, and recovery
-metadata. Back it up or remove it separately only when you no longer need that
-history.
+The contributor-only `./scripts/uninstall.sh` still removes a launcher linked to
+a source checkout. Back up or remove `~/.tandem` separately only when you no
+longer need its configuration, conversations, task history, logs, and recovery
+metadata.
