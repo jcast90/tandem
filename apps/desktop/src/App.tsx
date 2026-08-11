@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ActivityIcon,
+  AgentsIcon,
+  BackIcon,
   ChevronIcon,
   ComposeIcon,
   FileIcon,
@@ -15,6 +17,7 @@ import {
   StopIcon,
   TerminalIcon,
 } from "./components/Icons";
+import { AgentGlyph } from "./components/AgentGlyph";
 import { MarkdownMessage } from "./components/MarkdownMessage";
 import { SettingsView } from "./components/SettingsView";
 import { WorkTrace } from "./components/WorkTrace";
@@ -28,6 +31,7 @@ import {
 } from "./lib/activity";
 import { CodexConnection } from "./lib/codex";
 import { MAX_RECONNECT_ATTEMPTS, reconnectDelayMs } from "./lib/reconnect";
+import { hydrateSubagent, subagentsFromThread, updateSubagents } from "./lib/subagents";
 import {
   conciseGoalObjective,
   conversationRoutingContext,
@@ -47,27 +51,31 @@ import {
 } from "./lib/timeline";
 import {
   groupWorkerActivities,
-  workerActivitiesFromTask,
-  workerEventDetails,
-  workerEventLabel,
+  workerBackgroundTaskCount,
   workerSubagentCount,
 } from "./lib/workerActivity";
 import { conciseWorkerOutcome, workerSubtaskNames, workerTaskName } from "./lib/workerPresentation";
 import type {
   Activity,
+  BenchmarkReport,
+  BenchmarkScoreInput,
+  BenchmarkTrialInput,
   Bootstrap,
   ChatMessage,
   CodexModel,
+  CodexSubagent,
   CodexItem,
   CodexThread,
   ComposerAttachment,
   FilePreview,
   Goal,
   GoalHandoff,
+  ExecutionRun,
   PermissionMode,
   PluginOption,
   ProviderRoute,
   RoutingDecision,
+  RoutingRule,
   SkillOption,
   Task,
   TaskFile,
@@ -77,6 +85,23 @@ interface Project {
   path: string;
   name: string;
 }
+
+interface AgentEntry {
+  key: string;
+  id: string;
+  provider: "codex" | "claude";
+  name: string;
+  status: "pending" | "running" | "completed" | "failed" | "interrupted";
+  summary: string;
+  startedAt: number | null;
+  completedAt: number | null;
+  codex?: CodexSubagent;
+  task?: Task;
+}
+
+// How close to the bottom still counts as "following along". Needs slack for
+// sub-pixel rounding and for content that reflows as it streams in.
+const BOTTOM_PIN_THRESHOLD_PX = 64;
 
 const EMPTY_BOOTSTRAP: Bootstrap = {
   tandemHome: "",
@@ -105,6 +130,9 @@ const EMPTY_BOOTSTRAP: Bootstrap = {
   },
   goals: [],
   tasks: [],
+  runs: [],
+  routingProfiles: [],
+  routingRules: [],
 };
 
 export function App() {
@@ -123,6 +151,11 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [activityTab, setActivityTab] = useState<"activity" | "agents">("activity");
+  const [codexSubagents, setCodexSubagents] = useState<CodexSubagent[]>([]);
+  const [selectedAgentKey, setSelectedAgentKey] = useState("");
+  const [selectedAgentThread, setSelectedAgentThread] = useState<CodexThread | null>(null);
+  const [agentDetailState, setAgentDetailState] = useState<"idle" | "loading" | "error">("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [codexCommand, setCodexCommand] = useState("codex");
@@ -133,6 +166,7 @@ export function App() {
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [plugins, setPlugins] = useState<PluginOption[]>([]);
   const [models, setModels] = useState<CodexModel[]>([]);
+  const [benchmarks, setBenchmarks] = useState<BenchmarkReport[]>([]);
   const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
@@ -146,6 +180,7 @@ export function App() {
   const [claudeModel, setClaudeModel] = useState("");
   const connectionRef = useRef<CodexConnection | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const pinnedToBottomRef = useRef(true);
   const submissionEpochRef = useRef(0);
   const allowTurnEventsRef = useRef(false);
   const activeTurnRef = useRef("");
@@ -167,10 +202,72 @@ export function App() {
   }, []);
 
   const refreshTasks = useCallback(async () => {
-    const tasks = await invoke<Task[]>("desktop_tasks");
-    setBootstrap((current) => ({ ...current, tasks }));
+    const [tasks, runs] = await Promise.all([
+      invoke<Task[]>("desktop_tasks"),
+      invoke<ExecutionRun[]>("desktop_runs"),
+    ]);
+    setBootstrap((current) => ({ ...current, tasks, runs }));
     return tasks;
   }, []);
+
+  const refreshBenchmarks = useCallback(async () => {
+    const reports = await invoke<BenchmarkReport[]>("desktop_benchmarks");
+    setBenchmarks(reports);
+    return reports;
+  }, []);
+
+  const createBenchmark = useCallback(
+    async (name: string, budgetDollars: number) => {
+      setSettingsBusy(true);
+      try {
+        await invoke("desktop_benchmark_create", { name, budgetDollars });
+        await refreshBenchmarks();
+        setNotice("Benchmark created. Add the same task under each mode.");
+      } catch (error) {
+        setNotice(errorMessage(error));
+      } finally {
+        setSettingsBusy(false);
+      }
+    },
+    [refreshBenchmarks]
+  );
+
+  const addBenchmarkTrial = useCallback(
+    async (trial: BenchmarkTrialInput) => {
+      setSettingsBusy(true);
+      try {
+        await invoke("desktop_benchmark_add", { ...trial });
+        await refreshBenchmarks();
+        setNotice("Trial added.");
+      } catch (error) {
+        setNotice(errorMessage(error));
+      } finally {
+        setSettingsBusy(false);
+      }
+    },
+    [refreshBenchmarks]
+  );
+
+  const scoreBenchmarkTrial = useCallback(
+    async (score: BenchmarkScoreInput) => {
+      setSettingsBusy(true);
+      try {
+        await invoke("desktop_benchmark_score", { ...score });
+        await refreshBenchmarks();
+        setNotice("Outcome recorded.");
+      } catch (error) {
+        setNotice(errorMessage(error));
+      } finally {
+        setSettingsBusy(false);
+      }
+    },
+    [refreshBenchmarks]
+  );
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    void refreshBenchmarks().catch((error) => setNotice(errorMessage(error)));
+  }, [refreshBenchmarks, settingsOpen]);
 
   const scheduleReconnect = useCallback((projectRoot: string, detail: string) => {
     if (reconnectTimerRef.current !== null) return;
@@ -236,7 +333,10 @@ export function App() {
             )
           );
         },
-        onItem: (item, complete) => {
+        onItem: (item, complete, _turnId, observedAt) => {
+          if (item.type === "collabAgentToolCall" || item.type === "subAgentActivity") {
+            setCodexSubagents((current) => updateSubagents(current, item, observedAt));
+          }
           if (item.type === "agentMessage" && complete) {
             setMessages((current) =>
               completeAssistantMessage(
@@ -340,11 +440,6 @@ export function App() {
       try {
         const available = await connection.listModels();
         setModels(available);
-        const preferred = available.find((model) => model.isDefault) ?? available[0];
-        if (preferred) {
-          setCodexModel((current) => current || preferred.model || preferred.id);
-          setCodexEffort((current) => current || preferred.defaultReasoningEffort || "");
-        }
       } catch {
         setModels([]);
       }
@@ -408,7 +503,18 @@ export function App() {
     };
   }, [connect, recordConnectionError, refreshBootstrap, scheduleReconnect]);
 
+  // Follow new output only while the user is already at the bottom. During a
+  // live session these deps change constantly, so an unconditional scroll makes
+  // it impossible to read back through the transcript.
+  const handleConversationScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedToBottomRef.current = distanceFromBottom <= BOTTOM_PIN_THRESHOLD_PX;
+  }, []);
+
   useEffect(() => {
+    if (!pinnedToBottomRef.current) return;
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: generating ? "smooth" : "auto",
@@ -460,7 +566,7 @@ export function App() {
   const activeTasks = useMemo(
     () =>
       bootstrap.tasks.filter((task) =>
-        ["queued", "preparing", "running", "blocked"].includes(task.status)
+        ["waiting", "queued", "preparing", "running", "blocked"].includes(task.status)
       ),
     [bootstrap.tasks]
   );
@@ -468,14 +574,83 @@ export function App() {
     () => activeTasks.filter((task) => task.repoRoot === activeProject),
     [activeProject, activeTasks]
   );
-  const projectTasks = useMemo(
-    () => bootstrap.tasks.filter((task) => task.repoRoot === activeProject),
-    [activeProject, bootstrap.tasks]
+  const conversationTasks = useMemo(() => {
+    const ids = new Set(conversationTaskIds);
+    return bootstrap.tasks.filter((task) => ids.has(task.id));
+  }, [bootstrap.tasks, conversationTaskIds]);
+  const projectRuns = useMemo(
+    () => bootstrap.runs.filter((run) => run.repoRoot === activeProject),
+    [activeProject, bootstrap.runs]
+  );
+  const activeProjectRunKey = projectRuns
+    .filter((run) => ["queued", "running", "integrating"].includes(run.status))
+    .map((run) => run.id)
+    .join(",");
+  useEffect(() => {
+    if (!activeProjectRunKey) return;
+    const interval = window.setInterval(() => void refreshTasks().catch(() => undefined), 900);
+    return () => window.clearInterval(interval);
+  }, [activeProjectRunKey, refreshTasks]);
+  const conversationActiveTasks = useMemo(
+    () =>
+      conversationTasks.filter((task) =>
+        ["waiting", "queued", "preparing", "running", "blocked"].includes(task.status)
+      ),
+    [conversationTasks]
+  );
+  const agentEntries = useMemo<AgentEntry[]>(() => {
+    const runTaskIds = new Set(
+      projectRuns
+        .filter((run) =>
+          messages.some(
+            (message) =>
+              message.goalHandoff?.outerGoalId === run.goalId ||
+              message.goalHandoff?.workerGoalId === run.goalId
+          )
+        )
+        .flatMap((run) => run.taskIds)
+    );
+    const taskIds = new Set([...conversationTaskIds, ...runTaskIds]);
+    const claudeAgents: AgentEntry[] = bootstrap.tasks
+      .filter((task) => taskIds.has(task.id))
+      .map((task) => ({
+        key: `claude:${task.id}`,
+        id: task.id,
+        provider: "claude",
+        name: workerTaskName(task.objective),
+        status: taskAgentStatus(task.status),
+        summary: task.summary || task.error || task.objective,
+        startedAt: Date.parse(task.createdAt),
+        completedAt: terminalAgentStatus(taskAgentStatus(task.status))
+          ? Date.parse(task.updatedAt)
+          : null,
+        task,
+      }));
+    const codexAgents: AgentEntry[] = codexSubagents.map((agent) => ({
+      key: `codex:${agent.id}`,
+      id: agent.id,
+      provider: "codex",
+      name: agent.name,
+      status: agent.status,
+      summary: agent.summary || agent.prompt,
+      startedAt: agent.startedAt,
+      completedAt: agent.completedAt,
+      codex: agent,
+    }));
+    return [...codexAgents, ...claudeAgents].sort(
+      (left, right) =>
+        Number(terminalAgentStatus(left.status)) - Number(terminalAgentStatus(right.status)) ||
+        (right.startedAt ?? 0) - (left.startedAt ?? 0)
+    );
+  }, [bootstrap.tasks, codexSubagents, conversationTaskIds, messages, projectRuns]);
+  const selectedAgent = useMemo(
+    () => agentEntries.find((agent) => agent.key === selectedAgentKey) ?? null,
+    [agentEntries, selectedAgentKey]
   );
   const visibleActivities = useMemo(() => groupActivities(activities), [activities]);
   const claudeStepCount = useMemo(
-    () => projectTasks.reduce((count, task) => count + workerActivitiesFromTask(task).length, 0),
-    [projectTasks]
+    () => conversationTasks.reduce((count, task) => count + groupWorkerActivities(task).length, 0),
+    [conversationTasks]
   );
   const codexSubagentCount = useMemo(
     () => new Set(visibleActivities.flatMap((activity) => activity.subagentIds)).size,
@@ -501,14 +676,53 @@ export function App() {
     () => models.find((model) => model.model === codexModel || model.id === codexModel),
     [codexModel, models]
   );
+  const routingPolicy = useMemo(
+    () => ({ profiles: bootstrap.routingProfiles, rules: bootstrap.routingRules }),
+    [bootstrap.routingProfiles, bootstrap.routingRules]
+  );
   const routePreview = useMemo(
     () =>
-      resolveRoute(providerRoute, {
-        text: composer,
-        recentMessages: conversationRoutingContext(messages),
-        attachments,
-      }),
-    [attachments, composer, messages, providerRoute]
+      resolveRoute(
+        providerRoute,
+        {
+          text: composer,
+          recentMessages: conversationRoutingContext(messages),
+          attachments,
+        },
+        routingPolicy
+      ),
+    [attachments, composer, messages, providerRoute, routingPolicy]
+  );
+
+  const openAgent = useCallback(
+    async (key: string) => {
+      setActivityOpen(true);
+      setActivityTab("agents");
+      setSelectedAgentKey(key);
+      setSelectedAgentThread(null);
+      const entry = agentEntries.find((agent) => agent.key === key);
+      if (!entry || entry.provider !== "codex") {
+        setAgentDetailState("idle");
+        return;
+      }
+      const connection = connectionRef.current;
+      if (!connection) {
+        setAgentDetailState("error");
+        return;
+      }
+      setAgentDetailState("loading");
+      try {
+        const thread = await connection.readThread(entry.id);
+        setSelectedAgentThread(thread);
+        setCodexSubagents((current) =>
+          current.map((agent) => (agent.id === entry.id ? hydrateSubagent(agent, thread) : agent))
+        );
+        setAgentDetailState("idle");
+      } catch {
+        setAgentDetailState("error");
+      }
+    },
+    [agentEntries]
   );
 
   const chooseProject = async () => {
@@ -526,6 +740,9 @@ export function App() {
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
+    setCodexSubagents([]);
+    setSelectedAgentKey("");
+    setSelectedAgentThread(null);
     setSelectedSkillPaths([]);
     setSkillsOpen(false);
     setAttachments([]);
@@ -545,6 +762,9 @@ export function App() {
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
+    setCodexSubagents([]);
+    setSelectedAgentKey("");
+    setSelectedAgentThread(null);
     setSelectedSkillPaths([]);
     setSkillsOpen(false);
     setAttachments([]);
@@ -599,6 +819,20 @@ export function App() {
     }
   };
 
+  const saveRoutingSettings = async (rules: RoutingRule[]) => {
+    setSettingsBusy(true);
+    setNotice("");
+    try {
+      const next = await invoke<Bootstrap>("save_routing_settings", { rules });
+      setBootstrap(next);
+      setNotice("Automatic routing settings saved.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
   const openProviderLogin = async (provider: "codex" | "claude") => {
     try {
       const message = await invoke<string>("open_provider_login", { provider });
@@ -626,6 +860,9 @@ export function App() {
       setActiveThread(resumed);
       setMessages(messagesFromThread(resumed));
       setActivities(activitiesFromThread(resumed));
+      setCodexSubagents(subagentsFromThread(resumed));
+      setSelectedAgentKey("");
+      setSelectedAgentThread(null);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     }
@@ -636,6 +873,9 @@ export function App() {
     setActiveThread(null);
     setMessages([]);
     setActivities([]);
+    setCodexSubagents([]);
+    setSelectedAgentKey("");
+    setSelectedAgentThread(null);
     setSelectedSkillPaths([]);
     setSkillsOpen(false);
     setAttachments([]);
@@ -728,24 +968,29 @@ export function App() {
     const text = composer.trim();
     const connection = connectionRef.current;
     if (!text || !connection || connectionState !== "ready") return;
+    // Sending is an explicit request to follow along, so re-pin even if the
+    // user had scrolled up to read back through the transcript.
+    pinnedToBottomRef.current = true;
     setComposer("");
     setNotice("");
     setChatMenuId("");
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", text }]);
     const selectedSkills = skills.filter((skill) => selectedSkillPaths.includes(skill.path));
-    const routing = resolveRoute(providerRoute, {
-      text,
-      recentMessages: conversationRoutingContext(messages),
-      attachments,
-    });
     const routingInput = {
       text,
       recentMessages: conversationRoutingContext(messages),
       attachments,
     };
+    const routing = resolveRoute(providerRoute, routingInput, routingPolicy);
+    const routedCodexModel =
+      codexModel || (routing.provider === "codex" ? (routing.model ?? "") : "");
+    const routedCodexEffort =
+      codexEffort || (routing.provider === "codex" ? (routing.effort ?? "") : "");
+    const routedClaudeModel =
+      claudeModel || (routing.provider === "claude" ? (routing.model ?? "") : "");
     const turnOptions = {
-      model: codexModel || null,
-      effort: codexEffort || null,
+      model: routedCodexModel || null,
+      effort: routedCodexEffort || null,
       permissionMode,
       attachments,
     };
@@ -756,9 +1001,10 @@ export function App() {
         const routedText = routingPrompt(
           text,
           routing,
-          claudeModel,
+          routedClaudeModel,
           claudePermissionMode(permissionMode),
-          turnMetadataRef.current.get(activeTurnId)?.goalHandoff
+          turnMetadataRef.current.get(activeTurnId)?.goalHandoff,
+          routingPolicy
         );
         await connection.steerTurn(
           activeThread.id,
@@ -793,9 +1039,10 @@ export function App() {
       const routedText = routingPrompt(
         text,
         routing,
-        claudeModel,
+        routedClaudeModel,
         claudePermissionMode(permissionMode),
-        goalHandoff
+        goalHandoff,
+        routingPolicy
       );
       submissionEpoch = ++submissionEpochRef.current;
       allowTurnEventsRef.current = true;
@@ -861,7 +1108,7 @@ export function App() {
     if (turnId) turnMetadataRef.current.delete(turnId);
     setNotice("Stopping active work…");
     try {
-      const actions: Promise<unknown>[] = projectActiveTasks.map((task) =>
+      const actions: Promise<unknown>[] = conversationActiveTasks.map((task) =>
         invoke("desktop_task_cancel", { taskId: task.id })
       );
       if (connection && threadId && turnId) {
@@ -1081,7 +1328,9 @@ export function App() {
                   ? threadDisplayName(activeThread)
                   : "New chat"}
             </strong>
-            <span>{settingsOpen ? "Connections and setup" : projectName(activeProject)}</span>
+            <span>
+              {settingsOpen ? "Providers and automatic routing" : projectName(activeProject)}
+            </span>
           </div>
           <div className="header-actions">
             <button
@@ -1131,6 +1380,7 @@ export function App() {
         {settingsOpen ? (
           <SettingsView
             bootstrap={bootstrap}
+            models={models}
             codexCommand={codexCommand}
             claudeCommand={claudeCommand}
             connectionState={connectionState}
@@ -1143,10 +1393,16 @@ export function App() {
             onRevealLog={() => void revealConnectionLog()}
             onRetry={() => void retryConnections()}
             onSave={() => void saveSettings()}
+            onSaveRouting={(rules) => void saveRoutingSettings(rules)}
+            benchmarks={benchmarks}
+            onRefreshBenchmarks={() => void refreshBenchmarks()}
+            onCreateBenchmark={(name, budget) => void createBenchmark(name, budget)}
+            onAddBenchmarkTrial={(trial) => void addBenchmarkTrial(trial)}
+            onScoreBenchmarkTrial={(score) => void scoreBenchmarkTrial(score)}
           />
         ) : (
           <>
-            <div className="message-scroll" ref={scrollRef}>
+            <div className="message-scroll" ref={scrollRef} onScroll={handleConversationScroll}>
               {messages.length === 0 ? (
                 <EmptyConversation project={projectName(activeProject)} />
               ) : (
@@ -1161,6 +1417,13 @@ export function App() {
                           activitiesByTurn.get(message.turnId) ?? []
                         )}
                         goals={goalsForHandoff(message.goalHandoff, goalById)}
+                        subagents={codexSubagents.filter((agent) =>
+                          activitiesForMessage(
+                            message,
+                            activitiesByTurn.get(message.turnId!) ?? []
+                          ).some((activity) => activity.subagentIds?.includes(agent.id))
+                        )}
+                        onOpenAgent={(agentId) => void openAgent(`codex:${agentId}`)}
                         onOpenFile={(path) => void inspectFile(path)}
                       />
                     ) : message.role === "worker" && message.taskId ? (
@@ -1343,8 +1606,15 @@ export function App() {
                   </div>
                   {providerRoute === "auto" && composer.trim() && (
                     <div className={`route-preview ${routePreview.provider}`}>
-                      <span>Auto would use {titleCase(routePreview.provider)}</span>
-                      <small>{routePreview.reason}</small>
+                      <span>
+                        Auto · {titleCase(routePreview.taskClass ?? "conversation")} →{" "}
+                        {titleCase(routePreview.provider)}
+                      </span>
+                      <small>
+                        {routePreview.model
+                          ? `${titleCase(routePreview.model)} · ${routePreview.reason}`
+                          : routePreview.reason}
+                      </small>
                     </div>
                   )}
                   <div className="route-models">
@@ -1376,6 +1646,20 @@ export function App() {
                     ) : (
                       <>
                         <div className="model-list">
+                          <button
+                            className={!codexModel ? "selected" : ""}
+                            type="button"
+                            onClick={() => {
+                              setCodexModel("");
+                              setCodexEffort("");
+                            }}
+                          >
+                            <span>
+                              <b>Task default</b>
+                              <small>Use the Routing setting for this kind of work</small>
+                            </span>
+                            {!codexModel && <i>✓</i>}
+                          </button>
                           {models.map((model) => (
                             <button
                               className={
@@ -1511,7 +1795,7 @@ export function App() {
                       {providerRoute === "auto" && !composer.trim()
                         ? "Adaptive"
                         : providerRoute === "auto"
-                          ? `→ ${titleCase(routePreview.provider)}`
+                          ? `→ ${titleCase(routePreview.provider)}${routePreview.model ? ` · ${titleCase(routePreview.model)}` : ""}`
                           : providerRoute === "claude"
                             ? claudeModel
                               ? titleCase(claudeModel)
@@ -1521,7 +1805,7 @@ export function App() {
                     <ChevronIcon />
                   </button>
                 </div>
-                {(generating || projectActiveTasks.length > 0) && (
+                {(generating || conversationActiveTasks.length > 0) && (
                   <button
                     className="stop-button"
                     type="button"
@@ -1560,9 +1844,54 @@ export function App() {
           />
           <aside className="activity-panel" aria-label="Worker activity">
             <div className="activity-header">
-              <div>
-                <strong>Work and agents</strong>
-                <span>What Codex and Claude actually reported.</span>
+              <div className="activity-header-main">
+                {activityTab === "agents" && selectedAgent ? (
+                  <button
+                    className="agent-back"
+                    type="button"
+                    onClick={() => {
+                      setSelectedAgentKey("");
+                      setSelectedAgentThread(null);
+                    }}
+                    aria-label="Back to agents"
+                  >
+                    <BackIcon />
+                    <AgentGlyph
+                      id={selectedAgent.id}
+                      provider={selectedAgent.provider}
+                      label={`${selectedAgent.name} icon`}
+                    />
+                    <span>{selectedAgent.name}</span>
+                  </button>
+                ) : (
+                  <>
+                    <div>
+                      <strong>Work</strong>
+                      <span>Readable progress from Codex and Claude.</span>
+                    </div>
+                    <div className="activity-tabs" role="tablist" aria-label="Work views">
+                      <button
+                        className={activityTab === "activity" ? "active" : ""}
+                        type="button"
+                        role="tab"
+                        aria-selected={activityTab === "activity"}
+                        onClick={() => setActivityTab("activity")}
+                      >
+                        <ActivityIcon /> Activity
+                      </button>
+                      <button
+                        className={activityTab === "agents" ? "active" : ""}
+                        type="button"
+                        role="tab"
+                        aria-selected={activityTab === "agents"}
+                        onClick={() => setActivityTab("agents")}
+                      >
+                        <AgentsIcon /> Agents
+                        {agentEntries.length > 0 && <b>{agentEntries.length}</b>}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
               <button
                 className="icon-button"
@@ -1574,105 +1903,141 @@ export function App() {
               </button>
             </div>
             <div className="activity-content">
-              <div className="provider-lanes">
-                <div>
-                  <span className="provider-mark codex">O</span>
-                  <p>
-                    <strong>Codex</strong>
-                    <span>
-                      {generating ? "Working in the outer conversation" : "Outer conversation"}
-                    </span>
-                  </p>
-                  <em>{visibleActivities.length} steps</em>
-                  <small>
-                    {codexSubagentCount > 0
-                      ? `${codexSubagentCount} ${codexSubagentCount === 1 ? "subagent" : "subagents"}`
-                      : "No subagents"}
-                  </small>
-                </div>
-                <div>
-                  <span className="provider-mark claude">C</span>
-                  <p>
-                    <strong>Claude</strong>
-                    <span>
-                      {projectActiveTasks.length > 0
-                        ? `${projectActiveTasks.length} active worker ${
-                            projectActiveTasks.length === 1 ? "task" : "tasks"
-                          }`
-                        : "No active worker"}
-                    </span>
-                  </p>
-                  <em>
-                    {claudeStepCount} {claudeStepCount === 1 ? "step" : "steps"}
-                  </em>
-                  <small>{claudeSubagentSummary(projectTasks)}</small>
-                </div>
-              </div>
-
-              <section className="activity-section">
-                <div className="activity-section-heading">
-                  <strong>Claude work</strong>
-                  <span>{projectTasks.length}</span>
-                </div>
-                {projectTasks.length === 0 ? (
-                  <div className="activity-empty compact">
-                    <strong>No Claude worker was assigned</strong>
-                    <p>This conversation was handled directly by Codex.</p>
-                  </div>
+              {activityTab === "agents" ? (
+                selectedAgent ? (
+                  <AgentDetail
+                    agent={selectedAgent}
+                    thread={selectedAgentThread}
+                    state={agentDetailState}
+                    goal={
+                      selectedAgent.task?.goalId
+                        ? goalById.get(selectedAgent.task.goalId)
+                        : undefined
+                    }
+                    onOpenFile={(path) => void inspectFile(path)}
+                  />
                 ) : (
-                  projectTasks.map((task) => (
-                    <PanelTask
-                      key={task.id}
-                      task={task}
-                      goal={task.goalId ? goalById.get(task.goalId) : undefined}
-                      onOpenFile={(path) => void inspectFile(path)}
-                    />
-                  ))
-                )}
-              </section>
-
-              <section className="activity-section">
-                <div className="activity-section-heading">
-                  <strong>Codex steps</strong>
-                  <span>{visibleActivities.length}</span>
-                </div>
-                {visibleActivities.length === 0 ? (
-                  <div className="activity-empty compact">
-                    <strong>
-                      {generating ? "Preparing the first step" : "No activity in this chat"}
-                    </strong>
-                    <p>
-                      {generating
-                        ? "Reported commands, files, skills, and agents will appear here."
-                        : "Start a turn to see its work trace."}
-                    </p>
-                  </div>
-                ) : (
-                  visibleActivities.map((activity) => (
-                    <details className="activity-row" key={activity.id}>
-                      <summary>
-                        <span className={`activity-status ${activity.status}`} />
+                  <AgentList agents={agentEntries} onOpen={(key) => void openAgent(key)} />
+                )
+              ) : (
+                <>
+                  <div className="provider-lanes">
+                    <div>
+                      <span className="provider-mark codex">O</span>
+                      <p>
+                        <strong>Codex</strong>
                         <span>
-                          <strong>{activity.label}</strong>
-                          <small>{activity.detail}</small>
+                          {generating ? "Working in the outer conversation" : "Outer conversation"}
                         </span>
-                        <em>
-                          {activity.provider === "claude" ? "Claude" : "Codex"}
-                          {activity.startedAt ? ` · ${timeLabel(activity.startedAt)}` : ""}
-                        </em>
-                        <ChevronIcon className="chevron" />
-                      </summary>
-                      <div>
-                        {activity.details.length === 0 ? (
-                          <p>No additional detail was reported.</p>
-                        ) : (
-                          activity.details.map((detail) => <p key={detail}>{detail}</p>)
-                        )}
+                      </p>
+                      <em>{visibleActivities.length} steps</em>
+                      <small>
+                        {codexSubagentCount > 0
+                          ? `${codexSubagentCount} ${codexSubagentCount === 1 ? "subagent" : "subagents"}`
+                          : "No subagents"}
+                      </small>
+                    </div>
+                    <div>
+                      <span className="provider-mark claude">C</span>
+                      <p>
+                        <strong>Claude</strong>
+                        <span>
+                          {conversationActiveTasks.length > 0
+                            ? `${conversationActiveTasks.length} active worker ${
+                                conversationActiveTasks.length === 1 ? "task" : "tasks"
+                              }`
+                            : "No active worker"}
+                        </span>
+                      </p>
+                      <em>
+                        {claudeStepCount} {claudeStepCount === 1 ? "step" : "steps"}
+                      </em>
+                      <small>{claudeParallelSummary(conversationTasks)}</small>
+                    </div>
+                  </div>
+
+                  {projectRuns.length > 0 && (
+                    <section className="activity-section">
+                      <div className="activity-section-heading">
+                        <strong>Execution runs</strong>
+                        <span>{projectRuns.length}</span>
                       </div>
-                    </details>
-                  ))
-                )}
-              </section>
+                      {projectRuns.map((run) => (
+                        <ExecutionRunRow
+                          key={run.id}
+                          run={run}
+                          tasks={bootstrap.tasks.filter((task) => run.taskIds.includes(task.id))}
+                        />
+                      ))}
+                    </section>
+                  )}
+
+                  <section className="activity-section">
+                    <div className="activity-section-heading">
+                      <strong>Claude work</strong>
+                      <span>{conversationTasks.length}</span>
+                    </div>
+                    {conversationTasks.length === 0 ? (
+                      <div className="activity-empty compact">
+                        <strong>No Claude worker was assigned</strong>
+                        <p>This conversation was handled directly by Codex.</p>
+                      </div>
+                    ) : (
+                      conversationTasks.map((task) => (
+                        <PanelTask
+                          key={task.id}
+                          task={task}
+                          goal={task.goalId ? goalById.get(task.goalId) : undefined}
+                          onOpenFile={(path) => void inspectFile(path)}
+                        />
+                      ))
+                    )}
+                  </section>
+
+                  <section className="activity-section">
+                    <div className="activity-section-heading">
+                      <strong>Codex steps</strong>
+                      <span>{visibleActivities.length}</span>
+                    </div>
+                    {visibleActivities.length === 0 ? (
+                      <div className="activity-empty compact">
+                        <strong>
+                          {generating ? "Preparing the first step" : "No activity in this chat"}
+                        </strong>
+                        <p>
+                          {generating
+                            ? "Reported commands, files, skills, and agents will appear here."
+                            : "Start a turn to see its work trace."}
+                        </p>
+                      </div>
+                    ) : (
+                      visibleActivities.map((activity) => (
+                        <details className="activity-row" key={activity.id}>
+                          <summary>
+                            <span className={`activity-status ${activity.status}`} />
+                            <span>
+                              <strong>{activity.label}</strong>
+                              <small>{activity.detail}</small>
+                            </span>
+                            <em>
+                              {activity.provider === "claude" ? "Claude" : "Codex"}
+                              {activity.startedAt ? ` · ${timeLabel(activity.startedAt)}` : ""}
+                            </em>
+                            <ChevronIcon className="chevron" />
+                          </summary>
+                          <div>
+                            {activity.details.length === 0 ? (
+                              <p>No additional detail was reported.</p>
+                            ) : (
+                              activity.details.map((detail) => <p key={detail}>{detail}</p>)
+                            )}
+                          </div>
+                        </details>
+                      ))
+                    )}
+                  </section>
+                </>
+              )}
             </div>
             <div className="activity-footer">
               <div>
@@ -1736,6 +2101,283 @@ export function App() {
   );
 }
 
+function AgentList({ agents, onOpen }: { agents: AgentEntry[]; onOpen: (key: string) => void }) {
+  const [now, setNow] = useState(Date.now());
+  const active = agents.filter((agent) => !terminalAgentStatus(agent.status));
+  const done = agents.filter((agent) => terminalAgentStatus(agent.status));
+
+  useEffect(() => {
+    if (active.length === 0) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [active.length]);
+
+  if (agents.length === 0) {
+    return (
+      <div className="agents-empty">
+        <AgentsIcon />
+        <strong>No agents in this chat</strong>
+        <p>When Tandem delegates parallel work, each agent will appear here with live status.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="agent-list">
+      <AgentListGroup label="Active" agents={active} now={now} onOpen={onOpen} />
+      <AgentListGroup label="Done" agents={done} now={now} onOpen={onOpen} />
+    </div>
+  );
+}
+
+function AgentListGroup({
+  label,
+  agents,
+  now,
+  onOpen,
+}: {
+  label: string;
+  agents: AgentEntry[];
+  now: number;
+  onOpen: (key: string) => void;
+}) {
+  if (agents.length === 0) return null;
+  return (
+    <section className="agent-list-group">
+      <h3>
+        {label} <span>· {agents.length}</span>
+      </h3>
+      {agents.map((agent) => (
+        <button
+          className="agent-list-row"
+          key={agent.key}
+          type="button"
+          onClick={() => onOpen(agent.key)}
+        >
+          <AgentGlyph id={agent.id} provider={agent.provider} label={`${agent.name} icon`} />
+          <span>
+            <strong>{agent.name}</strong>
+            <small>{agent.summary || agentStatusText(agent.status)}</small>
+          </span>
+          <time>{agentTimeLabel(agent, now)}</time>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function AgentDetail({
+  agent,
+  thread,
+  state,
+  goal,
+  onOpenFile,
+}: {
+  agent: AgentEntry;
+  thread: CodexThread | null;
+  state: "idle" | "loading" | "error";
+  goal?: Goal | undefined;
+  onOpenFile: (path: string) => void;
+}) {
+  const [now, setNow] = useState(Date.now());
+  const active = !terminalAgentStatus(agent.status);
+  const elapsed = Math.max(
+    0,
+    (active ? now : (agent.completedAt ?? now)) - (agent.startedAt ?? now)
+  );
+
+  useEffect(() => {
+    if (!active) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [active]);
+
+  if (agent.task) {
+    return (
+      <div className="agent-detail">
+        <AgentDetailMeta agent={agent} elapsed={elapsed} />
+        <PanelTask task={agent.task} goal={goal} onOpenFile={onOpenFile} />
+      </div>
+    );
+  }
+
+  const groups = thread ? groupActivities(activitiesFromThread(thread)) : [];
+  const messages = thread ? subagentMessages(thread) : [];
+  return (
+    <div className="agent-detail">
+      <AgentDetailMeta agent={agent} elapsed={elapsed} />
+      {agent.codex?.prompt && (
+        <section className="agent-assignment">
+          <strong>Assignment</strong>
+          <p>{agent.codex.prompt}</p>
+        </section>
+      )}
+      {state === "loading" && (
+        <div className="agent-detail-loading" aria-label="Loading agent activity">
+          <span />
+          <span />
+          <span />
+        </div>
+      )}
+      {state === "error" && (
+        <div className="agent-detail-error">
+          <strong>Live detail is unavailable</strong>
+          <p>The agent summary is still preserved in this conversation.</p>
+        </div>
+      )}
+      {state === "idle" && thread && (
+        <>
+          {messages.map((message) => (
+            <div className="agent-message" key={message.id}>
+              <MarkdownMessage text={message.text} onOpenFile={onOpenFile} />
+            </div>
+          ))}
+          {groups.length > 0 && (
+            <section className="agent-detail-steps">
+              <strong>Reported activity</strong>
+              {groups.map((group) => (
+                <details key={group.id}>
+                  <summary>
+                    <i className={`activity-status ${group.status}`} />
+                    <span>
+                      <b>{group.label}</b>
+                      <small>{group.detail}</small>
+                    </span>
+                    <ChevronIcon />
+                  </summary>
+                  <div>
+                    {group.path && (
+                      <button type="button" onClick={() => onOpenFile(group.path!)}>
+                        <FileIcon /> {group.path}
+                      </button>
+                    )}
+                    {group.details
+                      .filter((detail) => detail !== group.path)
+                      .map((detail) => (
+                        <p key={detail}>{detail}</p>
+                      ))}
+                  </div>
+                </details>
+              ))}
+            </section>
+          )}
+          {messages.length === 0 && groups.length === 0 && (
+            <p className="agent-detail-quiet">This agent has not reported a readable step yet.</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AgentDetailMeta({ agent, elapsed }: { agent: AgentEntry; elapsed: number }) {
+  return (
+    <div className="agent-detail-meta">
+      <span className={`activity-status ${agentStatusClass(agent.status)}`} />
+      <p>
+        <strong>
+          {terminalAgentStatus(agent.status) ? "Worked" : "Working"} for {durationLabel(elapsed)}
+        </strong>
+        <small>
+          {agent.provider === "claude" ? "Claude worker" : "Codex subagent"} ·{" "}
+          {agentStatusText(agent.status)}
+        </small>
+      </p>
+    </div>
+  );
+}
+
+function subagentMessages(thread: CodexThread): Array<{ id: string; text: string }> {
+  return thread.turns.flatMap((turn) =>
+    turn.items.flatMap((item) =>
+      item.type === "agentMessage" && item.text.trim() ? [{ id: item.id, text: item.text }] : []
+    )
+  );
+}
+
+function ExecutionRunRow({ run, tasks }: { run: ExecutionRun; tasks: Task[] }) {
+  const complete = tasks.filter((task) => task.status === "completed").length;
+  const active = tasks.filter((task) =>
+    ["waiting", "queued", "preparing", "running"].includes(task.status)
+  ).length;
+  const status = run.status.replaceAll("_", " ");
+  return (
+    <details className="execution-run-row" open={active > 0 ? true : undefined}>
+      <summary>
+        <span className={`activity-status ${runStatusClass(run.status)}`} />
+        <span>
+          <strong>{run.objective}</strong>
+          <small>
+            {complete}/{tasks.length} tasks complete
+            {active > 0 ? ` · ${active} active` : ""}
+          </small>
+        </span>
+        <em>{status}</em>
+        <ChevronIcon className="chevron" />
+      </summary>
+      <div className="execution-run-tasks">
+        {tasks.map((task) => (
+          <div key={task.id}>
+            <span className={`activity-status ${runStatusClass(task.status)}`} />
+            <p>
+              <strong>{task.objective}</strong>
+              <small>{task.status.replaceAll("_", " ")}</small>
+            </p>
+          </div>
+        ))}
+        <small>
+          Concurrency {run.policy?.maxConcurrency ?? 2} · source {run.sourceSha.slice(0, 8)}
+        </small>
+        {run.error && <p className="worker-error">{run.error}</p>}
+      </div>
+    </details>
+  );
+}
+
+function runStatusClass(status: string): string {
+  if (["completed", "ready_to_apply", "applied"].includes(status)) return "completed";
+  if (["blocked", "failed", "canceled"].includes(status)) return "failed";
+  return "running";
+}
+
+function taskAgentStatus(status: string): AgentEntry["status"] {
+  if (status === "completed") return "completed";
+  if (["failed", "blocked"].includes(status)) return "failed";
+  if (["canceled", "skipped"].includes(status)) return "interrupted";
+  return ["waiting", "queued", "preparing"].includes(status) ? "pending" : "running";
+}
+
+function terminalAgentStatus(status: AgentEntry["status"]): boolean {
+  return ["completed", "failed", "interrupted"].includes(status);
+}
+
+function agentStatusText(status: AgentEntry["status"]): string {
+  if (status === "completed") return "Completed";
+  if (status === "failed") return "Needs attention";
+  if (status === "interrupted") return "Stopped";
+  return status === "pending" ? "Starting" : "Working";
+}
+
+function agentStatusClass(status: AgentEntry["status"]): string {
+  if (status === "completed") return "completed";
+  if (["failed", "interrupted"].includes(status)) return "failed";
+  return "running";
+}
+
+function agentTimeLabel(agent: AgentEntry, now: number): string {
+  if (!terminalAgentStatus(agent.status)) {
+    return durationLabel(Math.max(0, now - (agent.startedAt ?? now)));
+  }
+  const completedAt = agent.completedAt ?? agent.startedAt;
+  if (!completedAt) return agentStatusText(agent.status);
+  const seconds = Math.max(0, Math.round((now - completedAt) / 1_000));
+  if (seconds < 60) return "now";
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (seconds < 3_600) return formatter.format(-Math.round(seconds / 60), "minute");
+  if (seconds < 86_400) return formatter.format(-Math.round(seconds / 3_600), "hour");
+  return formatter.format(-Math.round(seconds / 86_400), "day");
+}
+
 function EmptyConversation({ project }: { project: string }) {
   return (
     <div className="empty-conversation">
@@ -1765,7 +2407,6 @@ function PanelTask({
   const updatedAt = new Date(task.updatedAt).getTime();
   const active = ["queued", "preparing", "running"].includes(task.status);
   const duration = Math.max(0, (active ? Date.now() : updatedAt) - startedAt);
-  const steps = workerActivitiesFromTask(task);
   const groups = groupWorkerActivities(task);
   const subagents = workerSubagentCount(task);
   const [expanded, setExpanded] = useState(active);
@@ -1797,9 +2438,13 @@ function PanelTask({
           <span>{task.workerModel || task.profileId}</span>
           <span>Started {timeLabel(startedAt)}</span>
           <span>
-            {steps.length} reported {steps.length === 1 ? "step" : "steps"}
+            {groups.length} condensed {groups.length === 1 ? "step" : "steps"}
           </span>
-          <span>{subagents > 0 ? `${subagents} subagents` : "No subagents reported"}</span>
+          <span>
+            {subagents > 0
+              ? `${subagents} reasoning ${subagents === 1 ? "subagent" : "subagents"}`
+              : "No reasoning subagents"}
+          </span>
         </div>
         {goal && (
           <div className="panel-task-goal">
@@ -1863,17 +2508,13 @@ function WorkerCard({
   onRefresh: () => void;
   onNotice: (message: string) => void;
 }) {
-  const [expandedEvent, setExpandedEvent] = useState<number | null>(null);
+  const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
   const [files, setFiles] = useState<TaskFile[] | null>(null);
   const [steering, setSteering] = useState(false);
   const [guidance, setGuidance] = useState("");
   const status = task?.status ?? "preparing";
   const report = task?.report;
-  const progress = (task?.events ?? [])
-    .filter((event) =>
-      ["worker.activity", "worker.steered", "worker.steer_failed"].includes(event.eventType)
-    )
-    .slice(-8);
+  const progress = task ? groupWorkerActivities(task).slice(-8) : [];
   const active = ["queued", "preparing", "running"].includes(status);
   const [now, setNow] = useState(Date.now());
   const startedAt = task?.createdAt ? new Date(task.createdAt).getTime() : null;
@@ -1952,24 +2593,25 @@ function WorkerCard({
 
       {progress.length > 0 && !report && (
         <div className="worker-progress">
-          {progress.map((event) => (
-            <div key={event.id}>
+          {progress.map((group) => (
+            <div key={group.id}>
               <button
                 type="button"
                 onClick={() =>
-                  setExpandedEvent((current) => (current === event.id ? null : event.id))
+                  setExpandedEvent((current) => (current === group.id ? null : group.id))
                 }
+                aria-expanded={expandedEvent === group.id}
               >
                 <span>
-                  <strong>{workerEventLabel(event.payload)}</strong>
-                  <small>{timeLabel(event.createdAt)}</small>
+                  <strong>{group.label}</strong>
+                  <small>{group.startedAt ? timeLabel(group.startedAt) : ""}</small>
                 </span>
-                <ChevronIcon className={expandedEvent === event.id ? "chevron open" : "chevron"} />
+                <ChevronIcon className={expandedEvent === group.id ? "chevron open" : "chevron"} />
               </button>
-              {expandedEvent === event.id && (
+              {expandedEvent === group.id && (
                 <div className="worker-event-detail">
-                  {workerEventDetails(event.payload).map((detail) => (
-                    <p key={detail}>{detail}</p>
+                  {group.details.map((detail, index) => (
+                    <p key={`${group.id}-${index}`}>{detail}</p>
                   ))}
                 </div>
               )}
@@ -2208,9 +2850,7 @@ function permissionLabel(mode: PermissionMode): string {
 }
 
 function claudePermissionMode(mode: PermissionMode): string {
-  if (mode === "ask") return "default";
-  if (mode === "full") return "bypassPermissions";
-  return "acceptEdits";
+  return mode;
 }
 
 function errorMessage(error: unknown): string {
@@ -2457,11 +3097,19 @@ function delegatedTaskFromValue(value: unknown): { id: string; objective: string
   return { id: value.id, objective: value.objective };
 }
 
-function claudeSubagentSummary(tasks: Task[]): string {
-  const count = tasks.reduce((total, task) => total + workerSubagentCount(task), 0);
-  return count > 0
-    ? `${count} ${count === 1 ? "subagent" : "subagents"} reported`
-    : "No subagents reported";
+function claudeParallelSummary(tasks: Task[]): string {
+  const subagents = tasks.reduce((total, task) => total + workerSubagentCount(task), 0);
+  const backgroundTasks = tasks.reduce((total, task) => total + workerBackgroundTaskCount(task), 0);
+  return [
+    subagents > 0
+      ? `${subagents} reasoning ${subagents === 1 ? "subagent" : "subagents"}`
+      : "No reasoning subagents",
+    backgroundTasks > 0
+      ? `${backgroundTasks} background ${backgroundTasks === 1 ? "task" : "tasks"}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

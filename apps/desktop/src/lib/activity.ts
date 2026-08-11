@@ -294,8 +294,13 @@ export function groupActivities(activities: Activity[]): ActivityGroup[] {
       previous.label =
         pathCount === 1 ? `Edited 1 file · ${previous.count} changes` : `Edited ${pathCount} files`;
     }
+    if (activity.kind === "command" && /^Ran (?:a|\d+) local commands?$/i.test(previous.label)) {
+      previous.label = `Ran ${previous.count} local commands`;
+    }
     if (!["read", "search", "web", "file"].includes(activity.kind)) {
-      previous.label = repeatedLabel(previous.label, previous.count);
+      if (!(activity.kind === "command" && /^Ran \d+ local commands$/i.test(previous.label))) {
+        previous.label = repeatedLabel(previous.label, previous.count);
+      }
     }
     previous.detail = activity.detail;
     previous.path = previous.count === 1 ? activity.path : undefined;
@@ -501,6 +506,9 @@ function agentStateDetails(
 
 function groupKey(label: string, kind: ActivityKind): string {
   if (["read", "search", "web", "file"].includes(kind)) return kind;
+  if (kind === "command" && /^Ran (?:a|\d+) local commands?$/i.test(label)) {
+    return "local-command";
+  }
   return label
     .replace(/ · \d+ times$/i, "")
     .replace(/^(Using|Used|Editing|Edited|Viewing|Viewed)\s+/i, "")

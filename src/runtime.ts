@@ -128,3 +128,43 @@ export async function launchWorker(task: TaskRecord, requested: Runtime): Promis
   child.unref();
   return { runtime: "process", runtimeRef: String(child.pid ?? "") };
 }
+
+export async function launchExecutionScheduler(runId: string): Promise<string> {
+  const runnerEntry =
+    process.env.TANDEM_SCHEDULER_ENTRY ??
+    process.env.TANDEM_WORKER_ENTRY ??
+    join(packageRoot(), "dist", "cli.js");
+  const runnerArgs = [runnerEntry, "scheduler-run", runId];
+  await mkdir(logsDir(), { recursive: true });
+  const logPath = join(logsDir(), `${runId}.scheduler.log`);
+  const logFd = openSync(logPath, "a");
+  const child = spawn(process.execPath, runnerArgs, {
+    cwd: process.cwd(),
+    env: { ...process.env, TANDEM_HOME: tandemHome() },
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+  });
+  closeSync(logFd);
+  child.unref();
+  return String(child.pid ?? "");
+}
+
+export async function launchDeliberationRunner(roomId: string): Promise<string> {
+  const runnerEntry =
+    process.env.TANDEM_ROOM_ENTRY ??
+    process.env.TANDEM_WORKER_ENTRY ??
+    join(packageRoot(), "dist", "cli.js");
+  const runnerArgs = [runnerEntry, "room-run", roomId];
+  await mkdir(logsDir(), { recursive: true });
+  const logPath = join(logsDir(), `${roomId}.room.log`);
+  const logFd = openSync(logPath, "a");
+  const child = spawn(process.execPath, runnerArgs, {
+    cwd: process.cwd(),
+    env: { ...process.env, TANDEM_HOME: tandemHome() },
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+  });
+  closeSync(logFd);
+  child.unref();
+  return String(child.pid ?? "");
+}

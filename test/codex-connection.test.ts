@@ -106,4 +106,65 @@ describe("CodexConnection lifecycle", () => {
     expect(onDisconnect).toHaveBeenCalledWith("The local Codex service stopped responding.");
     expect(socket.disconnect).toHaveBeenCalledOnce();
   });
+
+  it("reads a child thread with its turns for agent detail", async () => {
+    const listeners: Array<(message: WebSocketMessage) => void> = [];
+    const requests: Array<{ id?: number; method?: string; params?: Record<string, unknown> }> = [];
+    const childThread = {
+      id: "child-thread",
+      preview: "Auditing the scheduler",
+      status: { type: "completed" },
+      turns: [],
+    };
+    const socket = {
+      addListener: vi.fn((listener: (message: WebSocketMessage) => void) => {
+        listeners.push(listener);
+        return () => undefined;
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async (raw: string) => {
+        const request = JSON.parse(raw) as (typeof requests)[number];
+        requests.push(request);
+        if (request.id === undefined) return;
+        queueMicrotask(() => {
+          listeners[0]?.({
+            type: "Text",
+            data: JSON.stringify({
+              id: request.id,
+              result: request.method === "thread/read" ? { thread: childThread } : {},
+            }),
+          });
+        });
+      }),
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: globalThis,
+      writable: true,
+    });
+    const connection = new CodexConnection(
+      "ws://127.0.0.1:1",
+      {
+        onDelta: vi.fn(),
+        onItem: vi.fn(),
+        onTurnStarted: vi.fn(),
+        onTurnComplete: vi.fn(),
+        onActivity: vi.fn(),
+        onError: vi.fn(),
+        onDisconnect: vi.fn(),
+      },
+      async () => socket
+    );
+
+    await connection.connect();
+    await expect(connection.readThread("child-thread")).resolves.toEqual(childThread);
+
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/read",
+        params: { threadId: "child-thread", includeTurns: true },
+      })
+    );
+    connection.close();
+  });
 });

@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronIcon, FileIcon } from "./Icons";
+import { AgentGlyph } from "./AgentGlyph";
 import { durationLabel, groupActivities, timeLabel, type ActivityGroup } from "../lib/activity";
-import type { Activity, ChatMessage, Goal } from "../types";
+import type { Activity, ChatMessage, CodexSubagent, Goal } from "../types";
 
 export function WorkTrace({
   message,
   activities,
   goals,
+  subagents,
+  onOpenAgent,
   onOpenFile,
 }: {
   message: ChatMessage;
   activities: Activity[];
   goals: Goal[];
+  subagents: CodexSubagent[];
+  onOpenAgent: (agentId: string) => void;
   onOpenFile: (path: string) => void;
 }) {
   const running = message.workStatus === "running";
@@ -98,6 +103,18 @@ export function WorkTrace({
         <ChevronIcon className={expanded ? "chevron open" : "chevron"} />
       </button>
 
+      {subagents.length > 0 && (
+        <div className="subagent-chip-row" aria-label="Codex subagents for this work">
+          {subagents.map((agent) => (
+            <button key={agent.id} type="button" onClick={() => onOpenAgent(agent.id)}>
+              <AgentGlyph id={agent.id} provider="codex" />
+              <span>{agent.name}</span>
+              <small>{agentStatusLabel(agent.status)}</small>
+            </button>
+          ))}
+        </div>
+      )}
+
       {expanded && (
         <div className="work-trace-details">
           {goals.length > 0 && (
@@ -159,6 +176,13 @@ export function WorkTrace({
       )}
     </section>
   );
+}
+
+function agentStatusLabel(status: CodexSubagent["status"]): string {
+  if (status === "completed") return "done";
+  if (status === "failed") return "failed";
+  if (status === "interrupted") return "stopped";
+  return status === "pending" ? "starting" : "working";
 }
 
 function providerName(provider: "codex" | "claude"): string {

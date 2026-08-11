@@ -1,9 +1,28 @@
 {
-  "name": "@local/tandem",
+  "name": "@jcast90/tandem",
   "version": "0.1.0",
   "description": "Provider-neutral CLI orchestrator for an outer conversational agent and delegated execution workers.",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "author": "Jonathan Lancaster",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcast90/tandem.git"
+  },
+  "homepage": "https://github.com/jcast90/tandem#readme",
+  "bugs": {
+    "url": "https://github.com/jcast90/tandem/issues"
+  },
+  "keywords": [
+    "agents",
+    "orchestration",
+    "codex",
+    "claude",
+    "cli",
+    "tauri"
+  ],
+  "packageManager": "pnpm@11.0.9",
   "bin": {
     "tandem": "bin/tandem.mjs"
   },
@@ -14,13 +33,14 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
     "desktop": "pnpm --dir apps/desktop tauri dev",
     "desktop:build": "pnpm --dir apps/desktop tauri build",
-    "desktop:resources": "pnpm --dir apps/desktop exec esbuild ../../src/mcp-server.ts --bundle --platform=node --format=esm --target=node22 --outfile=src-tauri/resources/mcp-server.mjs && pnpm --dir apps/desktop exec esbuild ../../src/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=src-tauri/resources/cli.mjs",
+    "desktop:resources": "node apps/desktop/scripts/build-resources.mjs",
     "desktop:web": "pnpm --dir apps/desktop dev:web",
     "dev": "tsx src/cli.ts",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/*.{ts,json,html}\" \"*.md\" \"*.json\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/*.{ts,json,html}\" \"*.md\" \"*.json\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/scripts/*.mjs\" \"apps/desktop/*.{ts,json,html}\" \"docs/**/*.md\" \".github/**/*.{md,yml,yaml}\" \"*.md\" \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/scripts/*.mjs\" \"apps/desktop/*.{ts,json,html}\" \"docs/**/*.md\" \".github/**/*.{md,yml,yaml}\" \"*.md\" \"*.json\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

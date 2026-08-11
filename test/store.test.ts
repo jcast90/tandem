@@ -24,15 +24,18 @@ describe("TandemStore", () => {
     const task = store.createTask({
       workOrder: {
         objective: "Implement the CLI",
+        taskClass: "implementation",
         acceptanceCriteria: ["Help command works"],
         context: ["Use TypeScript"],
         goalId: child.id,
         parentTaskId: null,
         profileId: null,
         model: "opus",
+        effort: "high",
         permissionMode: "acceptEdits",
       },
       profileId: "worker-primary",
+      fallbackProfileIds: ["fallback-freebuff"],
       repoRoot: "/tmp/repo",
       worktreePath: "/tmp/worktree",
       branch: "tandem/test",
@@ -42,6 +45,8 @@ describe("TandemStore", () => {
     store.appendEvent(task.id, "worker.started", { pid: 42 });
     const updated = store.updateTask(task.id, {
       status: "completed",
+      profileId: "fallback-freebuff",
+      attemptedProfileIds: ["worker-primary"],
       summary: "Implemented",
       commitSha: "abc123",
       report: {
@@ -57,7 +62,11 @@ describe("TandemStore", () => {
     expect(updated.status).toBe("completed");
     expect(updated.goalId).toBe(child.id);
     expect(updated.workerModel).toBe("opus");
+    expect(updated.workerEffort).toBe("high");
     expect(updated.permissionMode).toBe("acceptEdits");
+    expect(updated.profileId).toBe("fallback-freebuff");
+    expect(updated.fallbackProfileIds).toEqual(["fallback-freebuff"]);
+    expect(updated.attemptedProfileIds).toEqual(["worker-primary"]);
     expect(updated.report?.tests).toEqual(["pnpm test"]);
     expect(store.listEvents(task.id).map((event) => event.type)).toEqual([
       "task.queued",
@@ -75,6 +84,7 @@ describe("TandemStore", () => {
     const task = store.createTask({
       workOrder: {
         objective: "Test prefix",
+        taskClass: "implementation",
         acceptanceCriteria: [],
         context: [],
         goalId: null,
@@ -98,6 +108,7 @@ describe("TandemStore", () => {
     const task = store.createTask({
       workOrder: {
         objective: "Test steering",
+        taskClass: "implementation",
         acceptanceCriteria: [],
         context: [],
         goalId: null,

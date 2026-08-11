@@ -101,7 +101,7 @@ export function sanitizeWorkerEnv(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
     "NODE_ENV",
     "SSH_AUTH_SOCK",
   ]);
-  const prefixes = ["LC_", "TANDEM_", "CMUX_", "TMUX"];
+  const prefixes = ["LC_", "TANDEM_", "PONYTAIL_", "CMUX_", "TMUX"];
   const result: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parent)) {
     if (value === undefined) continue;

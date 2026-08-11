@@ -18,6 +18,7 @@ describe("desktop adaptive routing", () => {
       mode: "auto",
       provider: "codex",
       reason: "Research, planning, or review",
+      taskClass: "research",
     });
   });
 
@@ -29,13 +30,23 @@ describe("desktop adaptive routing", () => {
     });
   });
 
+  it("distinguishes architecture and verification from implementation", () => {
+    expect(
+      classifyAutoRoute({ text: "Design the system architecture and data model" })
+    ).toMatchObject({ taskClass: "architecture", provider: "codex" });
+    expect(
+      classifyAutoRoute({ text: "Audit test coverage and verify release readiness" })
+    ).toMatchObject({ taskClass: "verification", provider: "codex" });
+  });
+
   it("routes implementation and verification to Claude", () => {
     expect(
       classifyAutoRoute({ text: "Implement the Tauri settings flow and add regression tests" })
     ).toEqual({
       mode: "auto",
       provider: "claude",
-      reason: "Implementation and verification",
+      reason: "Substantive implementation work",
+      taskClass: "implementation",
     });
   });
 
@@ -55,6 +66,7 @@ describe("desktop adaptive routing", () => {
       mode: "auto",
       provider: "codex",
       reason: "Small, bounded change",
+      taskClass: "quick",
     });
   });
 
@@ -77,13 +89,64 @@ describe("desktop adaptive routing", () => {
     });
 
     expect(prompt).toContain("Do not edit files or run implementation commands yourself");
+    expect(prompt).toContain("assess whether independent read-only scoping or review work");
+    expect(prompt).toContain("up to 3 Codex collaboration subagents");
     expect(prompt).toContain("call tandem_delegate");
     expect(prompt).toContain('model="opus"');
     expect(prompt).toContain('goal_id="worker-1"');
-    expect(routingDecisionFromText(prompt)).toEqual(decision);
+    expect(routingDecisionFromText(prompt)).toEqual({ ...decision, model: "opus" });
     expect(goalHandoffFromText(prompt)).toEqual({
       outerGoalId: "outer-1",
       workerGoalId: "worker-1",
+    });
+  });
+
+  it("requires a cost-aware parallelism assessment for substantial Codex work", () => {
+    const prompt = routingPrompt(
+      "Audit the architecture and review the implementation",
+      resolveRoute("codex", { text: "Audit the architecture and review the implementation" }),
+      "",
+      "default"
+    );
+
+    expect(prompt).toContain("always assess whether two or more independent");
+    expect(prompt).toContain("coordination and token cost");
+    expect(prompt).toContain("at most 3");
+  });
+
+  it("applies the configured profile, model, effort, and concurrency for Auto", () => {
+    const decision = classifyAutoRoute(
+      { text: "Research competitors and recommend a positioning strategy" },
+      {
+        profiles: [
+          {
+            id: "worker-research",
+            role: "worker",
+            provider: "anthropic",
+            transport: "claude-cli",
+            model: null,
+          },
+        ],
+        rules: [
+          {
+            taskClass: "research",
+            profileId: "worker-research",
+            fallbackProfileIds: [],
+            model: "sonnet",
+            effort: "medium",
+            maxConcurrency: 2,
+          },
+        ],
+      }
+    );
+
+    expect(decision).toMatchObject({
+      provider: "claude",
+      taskClass: "research",
+      profileId: "worker-research",
+      model: "sonnet",
+      effort: "medium",
+      maxConcurrency: 2,
     });
   });
 

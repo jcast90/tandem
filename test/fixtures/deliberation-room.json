@@ -1,0 +1,11 @@
+{
+  "question": "Compare the independent recommendations and produce one testable execution plan.",
+  "participants": [
+    { "profileId": "outer-primary" },
+    { "profileId": "worker-primary" },
+    { "profileId": "fallback-freebuff" }
+  ],
+  "chairProfileId": "outer-primary",
+  "rounds": 2,
+  "preserveDissent": true
+}

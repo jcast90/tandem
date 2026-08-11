@@ -1,6 +1,7 @@
 import type { Profile } from "../protocol.js";
 import { ClaudeCliWorkerAdapter } from "./claude-cli.js";
 import { CodexCliOuterAdapter } from "./codex-cli.js";
+import { FreebuffCliWorkerAdapter } from "./freebuff-cli.js";
 import type { OuterAdapter, WorkerAdapter } from "./types.js";
 
 export function createOuterAdapter(profile: Profile): OuterAdapter {
@@ -16,6 +17,8 @@ export function createWorkerAdapter(profile: Profile): WorkerAdapter {
   switch (profile.transport) {
     case "claude-cli":
       return new ClaudeCliWorkerAdapter();
+    case "freebuff-cli":
+      return new FreebuffCliWorkerAdapter();
     default:
       throw new Error(`Worker transport is not implemented yet: ${profile.transport}`);
   }

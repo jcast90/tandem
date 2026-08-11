@@ -52,6 +52,26 @@ are supporting information revealed only when useful.
   explicit actions for an external editor or Terminal.
 - Subscription native: Codex and Claude authentication remain owned by their
   installed CLIs.
+- Policy-driven routing: task categories map to provider profiles, models,
+  effort, and bounded parallelism through one configuration shared by the
+  desktop, CLI, and scheduler; explicit turn choices take precedence.
+- Bounded multi-model deliberation: independent blind proposals, critique
+  rounds, a configurable chair, preserved dissent, and a durable contribution
+  ledger before execution; interactive-only participants pause at an explicit
+  resumable checkpoint rather than being silently omitted.
+- Explicit recovery routing: Codex or Claude quota exhaustion can hand a
+  checkpointed task to Freebuff without masking authentication or code errors.
+- Bounded parallelism: every substantial request is assessed for independent
+  workstreams, but Tandem only fans out when the expected latency or quality
+  gain exceeds coordination, token, and merge cost.
+- Durable execution: long-running work is represented as goals and resumable
+  tasks with explicit dependencies, progress, and terminal outcomes.
+- Safe composition: parallel editing workers start from one immutable source,
+  publish normalized task commits, and meet in an isolated integration stage
+  before the user's checkout can change.
+- Measurable leverage: compare matched real work across provider-only, manual,
+  and Tandem modes using acceptance, quality, speed, human attention, and honest
+  subscription-usage evidence before claiming efficiency or savings.
 
 ## Accessibility & Inclusion
 
