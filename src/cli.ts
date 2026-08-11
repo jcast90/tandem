@@ -498,11 +498,10 @@ async function routingCommand(rawArgs: string[]): Promise<void> {
 async function roomCommand(rawArgs: string[]): Promise<void> {
   const subcommand = rawArgs.shift() ?? "plan";
   if (subcommand === "plan") {
-    const file = resolve(requireOption(rawArgs, "--file", "room definition"));
-    const definition: unknown = JSON.parse(await readFile(file, "utf8"));
+    const definition = await loadRoomDefinition(rawArgs);
     const plan = planDeliberation(definition, await loadConfig());
     console.log(
-      `Meeting room · ${plan.participants.length} participants · ${plan.room.rounds} rounds`
+      `Deliberation room · ${plan.participants.length} participants · ${plan.room.rounds} rounds + synthesis`
     );
     console.log(plan.room.question);
     for (const stage of plan.stages) {
@@ -531,8 +530,7 @@ async function roomCommand(rawArgs: string[]): Promise<void> {
       return;
     }
     if (subcommand === "start") {
-      const file = resolve(requireOption(rawArgs, "--file", "room definition"));
-      const definition: unknown = JSON.parse(await readFile(file, "utf8"));
+      const definition = await loadRoomDefinition(rawArgs);
       const cd = optionValue(rawArgs, "--cd");
       printRoomSnapshot(
         await service.createDeliberationRoom(definition, cd ? resolve(cd) : process.cwd())
@@ -572,6 +570,21 @@ async function roomCommand(rawArgs: string[]): Promise<void> {
   } finally {
     service.close();
   }
+}
+
+async function loadRoomDefinition(values: string[]): Promise<unknown> {
+  const file = resolve(requireOption(values, "--file", "room definition"));
+  const definition: unknown = JSON.parse(await readFile(file, "utf8"));
+  const roundsValue = optionValue(values, "--rounds");
+  if (roundsValue === undefined) return definition;
+  if (typeof definition !== "object" || definition === null || Array.isArray(definition)) {
+    throw new Error("Room definition must be a JSON object.");
+  }
+  const rounds = Number(roundsValue);
+  if (!Number.isInteger(rounds) || rounds < 1 || rounds > 5) {
+    throw new Error("--rounds must be a whole number from 1 to 5.");
+  }
+  return { ...definition, rounds };
 }
 
 async function goalCommand(rawArgs: string[]): Promise<void> {
@@ -1266,9 +1279,9 @@ Usage:
       [--fallback <profile-id[,profile-id]|none>]
       [--effort <effort|auto>] [--concurrency <1-8>]
   tandem routing reset
-  tandem room plan --file <room.json>
+  tandem room plan --file <room.json> [--rounds <1-5>]
   tandem room list
-  tandem room start --file <room.json> [--cd <project>]
+  tandem room start --file <room.json> [--rounds <1-5>] [--cd <project>]
   tandem room show <room-id>
   tandem room watch <room-id> [--once]
   tandem room contribute <room-id> --profile <profile-id> --file <response.md>

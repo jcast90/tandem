@@ -63,7 +63,7 @@ export const DeliberationRoomSchema = z
     question: z.string().min(1),
     participants: z.array(DeliberationParticipantSchema).min(2).max(5),
     chairProfileId: z.string().min(1).nullable().default(null),
-    rounds: z.number().int().min(1).max(3).default(2),
+    rounds: z.number().int().min(1).max(5).default(2),
     maxEstimatedTokens: z.number().int().positive().default(120_000),
     preserveDissent: z.boolean().default(true),
   })
@@ -96,7 +96,14 @@ export const DeliberationStatusSchema = z.enum([
 ]);
 export type DeliberationStatus = z.infer<typeof DeliberationStatusSchema>;
 
-export const DeliberationStageKindSchema = z.enum(["independent", "critique", "synthesis"]);
+export const DeliberationStageKindSchema = z.enum([
+  "independent",
+  "critique",
+  "reframe",
+  "falsification",
+  "revision",
+  "synthesis",
+]);
 export type DeliberationStageKind = z.infer<typeof DeliberationStageKindSchema>;
 
 export const DeliberationContributionStatusSchema = z.enum([

@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 describe("provider-neutral deliberation rooms", () => {
-  it("keeps the first responses blind and bounds critique rounds", () => {
+  it("keeps the first response blind and plans five distinct deliberation rounds", () => {
     const plan = planDeliberation(
       {
         question: "Choose the safest execution plan.",
@@ -28,7 +28,7 @@ describe("provider-neutral deliberation rooms", () => {
           { profileId: "fallback-freebuff" },
         ],
         chairProfileId: "outer-primary",
-        rounds: 2,
+        rounds: 5,
       },
       DEFAULT_CONFIG
     );
@@ -46,7 +46,25 @@ describe("provider-neutral deliberation rooms", () => {
         profileIds: ["outer-primary", "worker-primary", "fallback-freebuff"],
         blind: false,
       },
-      { kind: "synthesis", round: 3, profileIds: ["outer-primary"], blind: false },
+      {
+        kind: "reframe",
+        round: 3,
+        profileIds: ["outer-primary", "worker-primary", "fallback-freebuff"],
+        blind: false,
+      },
+      {
+        kind: "falsification",
+        round: 4,
+        profileIds: ["outer-primary", "worker-primary", "fallback-freebuff"],
+        blind: false,
+      },
+      {
+        kind: "revision",
+        round: 5,
+        profileIds: ["outer-primary", "worker-primary", "fallback-freebuff"],
+        blind: false,
+      },
+      { kind: "synthesis", round: 6, profileIds: ["outer-primary"], blind: false },
     ]);
     expect(synthesisContract(plan.room)).toContain("Minority concerns");
   });
@@ -114,8 +132,61 @@ describe("provider-neutral deliberation rooms", () => {
     expect(independent).toHaveLength(2);
     expect(independent[0]?.prompt).not.toContain("A bounded independent recommendation.");
     const critique = invocations.find((item) => item.stage === "critique");
-    expect(critique?.prompt).toContain("### Contribution A (round 1)");
+    expect(critique?.prompt).toContain("### Member A (round 1, independent)");
     expect(store.listDeliberationEvents(room.id).at(-1)?.type).toBe("room.completed");
+    store.close();
+  });
+
+  it("gives five-round rooms distinct challenge, learning, and falsification prompts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-room-five-round-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const room = store.createDeliberationRoom({
+      projectRoot: root,
+      question: "Find a strategy that survives serious disagreement.",
+      participants: [
+        { profileId: "outer-primary", model: null },
+        { profileId: "worker-primary", model: null },
+      ],
+      chairProfileId: "outer-primary",
+      rounds: 5,
+      maxEstimatedTokens: 100_000,
+      preserveDissent: true,
+    });
+    const invocations: DiscussionInvocation[] = [];
+    const runner = new DeliberationRunner(store, {
+      loadConfig: async () => DEFAULT_CONFIG,
+      invoke: async (input) => {
+        invocations.push(input);
+        return {
+          content:
+            input.stage === "synthesis"
+              ? "## Shared conclusions\nUse the evidence-weighted strategy."
+              : `${input.stage} contribution from ${input.profile.id}`,
+          providerSessionId: null,
+          usage: { total_tokens: 20 },
+        };
+      },
+    });
+
+    const result = await runner.run(room.id);
+    const promptFor = (stage: DiscussionInvocation["stage"]) =>
+      invocations.find((invocation) => invocation.stage === stage)?.prompt ?? "";
+    const critiquePrompts = invocations.filter((invocation) => invocation.stage === "critique");
+
+    expect(result.status).toBe("completed");
+    expect(store.listDeliberationContributions(room.id)).toHaveLength(11);
+    expect(critiquePrompts[0]?.prompt).toContain("You are Member A");
+    expect(critiquePrompts[1]?.prompt).toContain("You are Member B");
+    expect(critiquePrompts[0]?.prompt).toContain("### Member B (round 1, independent)");
+    expect(promptFor("critique")).toContain("what would falsify");
+    expect(promptFor("reframe")).toContain("Combine at least two useful ideas");
+    expect(promptFor("reframe")).toContain("changed your mind");
+    expect(promptFor("falsification")).toContain("Red-team the strongest emerging approaches");
+    expect(promptFor("revision")).toContain(
+      "adopted, rejected, combined, or substantially changed"
+    );
+    expect(promptFor("synthesis")).toContain("Do not decide by majority vote");
     store.close();
   });
 
@@ -157,7 +228,7 @@ describe("provider-neutral deliberation rooms", () => {
     const firstPrompt = store
       .listDeliberationContributions(room.id)
       .find((item) => item.status === "awaiting_input");
-    expect(firstPrompt?.prompt).toContain("blind independent round");
+    expect(firstPrompt?.prompt).toContain("blind opening round");
     runner.contribute(room.id, "fallback-freebuff", "Manual independent response");
 
     expect((await runner.run(room.id)).status).toBe("awaiting_input");
