@@ -1,12 +1,11 @@
 import {
   DeliberationRoomSchema,
   type DeliberationRoom,
+  type DeliberationStageKind,
   type Profile,
   type TandemConfig,
 } from "./protocol.js";
 import { resolveProfile } from "./config.js";
-
-export type DeliberationStageKind = "independent" | "critique" | "synthesis";
 
 export interface DeliberationStage {
   kind: DeliberationStageKind;
@@ -29,17 +28,29 @@ export function planDeliberation(input: unknown, config: TandemConfig): Delibera
   );
   const chair = resolveProfile(config, room.chairProfileId ?? room.participants[0]!.profileId);
   const profileIds = participants.map((participant) => participant.id);
-  const stages: DeliberationStage[] = [{ kind: "independent", round: 1, profileIds, blind: true }];
-  for (let round = 2; round <= room.rounds; round += 1) {
-    stages.push({ kind: "critique", round, profileIds, blind: false });
-  }
+  const stages: DeliberationStage[] = Array.from({ length: room.rounds }, (_, index) => {
+    const round = index + 1;
+    return {
+      kind: stageKindForRound(round),
+      round,
+      profileIds,
+      blind: round === 1,
+    };
+  });
   stages.push({ kind: "synthesis", round: room.rounds + 1, profileIds: [chair.id], blind: false });
   return { room, participants, chair, stages };
+}
+
+function stageKindForRound(round: number): Exclude<DeliberationStageKind, "synthesis"> {
+  const stages = ["independent", "critique", "reframe", "falsification", "revision"] as const;
+  return stages[round - 1] ?? "revision";
 }
 
 export function synthesisContract(room: DeliberationRoom): string[] {
   return [
     "Shared conclusions",
+    "How the idea evolved",
+    "Alternative directions considered",
     "Conflicting assumptions",
     ...(room.preserveDissent ? ["Minority concerns"] : []),
     "Recommended response or execution plan",

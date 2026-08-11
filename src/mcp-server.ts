@@ -24,7 +24,7 @@ server.registerTool(
   {
     title: "Create Tandem discussion room",
     description:
-      "Start blind independent responses, anonymized critique rounds, and a chair synthesis across configured CLI profiles.",
+      "Start one to five rounds of blind proposals, challenge, reframing, falsification, and revision before a chair synthesis across configured CLI profiles.",
     inputSchema: {
       question: z.string().min(1),
       participants: z
@@ -37,7 +37,7 @@ server.registerTool(
         .min(2)
         .max(5),
       chair_profile_id: z.string().min(1).optional(),
-      rounds: z.number().int().min(1).max(3).optional(),
+      rounds: z.number().int().min(1).max(5).optional(),
       max_estimated_tokens: z.number().int().positive().optional(),
       preserve_dissent: z.boolean().optional(),
     },

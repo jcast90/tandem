@@ -271,24 +271,36 @@ these tools:
 
 ## Compare and meeting rooms
 
-Meeting rooms use bounded deliberation instead of an open-ended model chat. The
-first round gives every participant the same question without exposing the
-other answers. Later rounds critique the collected proposals, and one configured
-chair synthesizes shared conclusions, conflicting assumptions, preserved
-dissent, validation steps, and a provider-neutral task graph.
+Meeting rooms use bounded deliberation instead of an open-ended model chat. A
+room can run one to five substantive rounds, followed by a separate chair
+synthesis. The complete five-round sequence is independent proposals,
+adversarial critique, reframing and cross-pollination, falsification, and final
+revision. Each round runs participants concurrently; later rounds receive the
+persisted room history under stable anonymous coworker aliases such as Member A
+and Member B. Participants respond directly to one another, steelman and
+challenge specific ideas, ask questions for the next round, propose alternatives,
+and explicitly explain what changed their positions. The configured chair then
+weighs claims by evidence and how well they survived criticism, showing how the
+seed idea evolved while preserving dissent and hypotheses that still need
+validation.
 
 Preview a room definition before spending provider usage:
 
 ```bash
-tandem room plan --file test/fixtures/deliberation-room.json
+tandem room plan --file test/fixtures/deliberation-room.json --rounds 5
 ```
 
 Start the durable runner and follow it until synthesis:
 
 ```bash
-tandem room start --file test/fixtures/deliberation-room.json --cd ~/projects/my-app
+tandem room start --file test/fixtures/deliberation-room.json --rounds 5 --cd ~/projects/my-app
 tandem room watch <room-id>
 ```
+
+The `--rounds` option overrides the JSON definition for that invocation. You can
+also persist the choice as `"rounds": 5` in the room file. More rounds multiply
+provider usage, so room definitions should set a deliberate
+`maxEstimatedTokens` budget for expensive discussions.
 
 Codex and Claude turns execute concurrently inside each round using their
 authenticated CLI subscriptions. Each prompt, response, provider session ID,
