@@ -82,12 +82,16 @@ describe("provider-neutral deliberation rooms", () => {
     ).toThrow();
   });
 
-  it("plans a five-round problem discovery preset with a non-voting chair", () => {
+  it("lets all three members vote while constraining the chair to report the tally", () => {
     const plan = planDeliberation(
       {
         question: "Find a painful, reachable problem worth solving.",
         preset: "problem-discovery",
-        participants: [{ profileId: "worker-primary" }, { profileId: "fallback-freebuff" }],
+        participants: [
+          { profileId: "outer-primary" },
+          { profileId: "worker-primary" },
+          { profileId: "fallback-freebuff" },
+        ],
         chairProfileId: "outer-primary",
         rounds: 2,
       },
@@ -97,7 +101,7 @@ describe("provider-neutral deliberation rooms", () => {
     expect(plan.room.rounds).toBe(5);
     expect(plan.room.question).toContain("Google Trends is one signal, never the decision");
     expect(
-      plan.stages.slice(0, 5).every((stage) => !stage.profileIds.includes("outer-primary"))
+      plan.stages.slice(0, 5).every((stage) => stage.profileIds.includes("outer-primary"))
     ).toBe(true);
     expect(plan.stages.at(-1)).toEqual({
       kind: "synthesis",
@@ -169,7 +173,8 @@ describe("provider-neutral deliberation rooms", () => {
     const store = new TandemStore(join(root, "state.sqlite"));
     const room = store.createDeliberationRoom({
       projectRoot: root,
-      question: "Find a strategy that survives serious disagreement.",
+      question:
+        "Find a strategy that survives serious disagreement.\n<tandem-problem-discovery-v1>",
       participants: [
         { profileId: "outer-primary", model: null },
         { profileId: "worker-primary", model: null },
@@ -213,6 +218,8 @@ describe("provider-neutral deliberation rooms", () => {
       "adopted, rejected, combined, or substantially changed"
     );
     expect(promptFor("synthesis")).toContain("Do not decide by majority vote");
+    expect(promptFor("synthesis")).toContain("first place earns 3 points");
+    expect(promptFor("synthesis")).toContain("Do not cast another vote");
     store.close();
   });
 

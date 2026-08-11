@@ -95,10 +95,10 @@ This is a Problem Discovery Room. Discover evidence-backed, recurring problems b
 2. Cross-examine recurrence, consequence, current workaround or spend, economic buyer, and reachability. Reject unsupported claims.
 3. Collect demand signals: incumbent adoption, complaints, substitutes, communities, search behavior, and market change. Competition is evidence of demand, not automatic disqualification.
 4. Falsify the strongest problem cards: explain why each remains unsolved, what could make it unimportant, and the smallest real-world test that could kill it.
-5. Submit a locked independent ballot ranking at most three problem cards by evidence strength, recurrence, consequence, existing spend, buyer reachability, and timing. Include calibrated confidence and decisive missing evidence. Do not react to same-round ballots.
+5. Submit a locked independent ballot ranking at most three problem cards by evidence strength, recurrence, consequence, existing spend, buyer reachability, and timing. Use the problem card's stable title, give a short evidence rationale, calibrated confidence, and decisive missing evidence. Do not react to same-round ballots.
 
 Google Trends is one signal, never the decision. When web access permits, test both problem-language and solution-language queries at trends.google.com/trends/explore. Record the exact query or topic, geography, time range, direction and seasonality, relevant rising queries, comparison baseline, and caveats. Cite the source. Never treat relative search interest as search volume, willingness to pay, or proof of a market. If a signal cannot be verified, label it as a proposed query rather than a finding.
 
-The chair facilitates and synthesizes only: introduce no new candidate, cast no ballot, disclose no provider identity, and weight evidence rather than vote count.
+Every listed participant contributes in all five rounds and casts one ballot, including a participant who is also configured as chair. The chair's later synthesis call is only a reporter: it receives no additional vote, introduces no new candidate, and may not change or break the locked tally.
 </tandem-problem-discovery-v1>`;
 }

@@ -327,8 +327,10 @@ outer conversation through Tandem's MCP tools, so the completed chair synthesis
 can appear as a single response in the chat.
 
 For product research, set `preset` to `problem-discovery`. Tandem fixes the room
-at five rounds, keeps the configured chair out of participant ballots, and ends
-with ranked problem cards instead of a product pitch. The protocol treats
+at five rounds and ends with ranked problem cards instead of a product pitch.
+Codex, Claude, and Freebuff each contribute and cast one locked ballot. The
+chair's separate synthesis call reports a fixed 3-2-1 tally and cannot add a
+vote, reorder the result, or break a tie. The protocol treats
 competition, workarounds, existing spend, and buyer reachability as primary
 evidence. Google Trends comparisons are recorded as a supporting signal with
 their query, geography, time range, direction, baseline, and caveats; relative
@@ -338,7 +340,11 @@ search interest never counts as market size or willingness to pay.
 {
   "question": "Find a painful, reachable problem worth solving.",
   "preset": "problem-discovery",
-  "participants": [{ "profileId": "worker-primary" }, { "profileId": "fallback-freebuff" }],
+  "participants": [
+    { "profileId": "outer-primary" },
+    { "profileId": "worker-primary" },
+    { "profileId": "fallback-freebuff" }
+  ],
   "chairProfileId": "outer-primary",
   "maxEstimatedTokens": 120000
 }

@@ -1,5 +1,5 @@
 import { loadConfig, resolveProfile } from "./config.js";
-import { planDeliberation, synthesisContract } from "./deliberation.js";
+import { isProblemDiscoveryRoom, planDeliberation, synthesisContract } from "./deliberation.js";
 import type {
   DeliberationContributionRecord,
   DeliberationRoom,
@@ -312,12 +312,16 @@ Produce your revised position after the room's critiques, alternatives, and fals
     }
 
     const headings = synthesisContract(roomInput(room));
+    const tallyRules = isProblemDiscoveryRoom(room.question)
+      ? `\nThis room's locked ballots are authoritative. Reproduce each anonymous ballot and calculate the result mechanically: first place earns 3 points, second earns 2, and third earns 1. A room-supported candidate must appear on at least two ballots; keep single-ballot candidates as minority proposals. Sort by total points and leave equal totals tied. Your earlier contribution and ballot have exactly the same weight as each coworker's. Do not cast another vote, alter the order, or break a tie in prose.\n`
+      : "";
     return `${base}
 
 Anonymized room contributions:
 ${rendered}
 
 You are the chair. Produce the final standalone synthesis for the user; do not expose providers or internal mechanics. Do not decide by majority vote. Weight claims by evidence, explanatory power, falsifiability, and how well they survived coworker criticism. Show how the seed idea evolved, including meaningful pivots and newly surfaced directions. Preserve meaningful disagreement instead of forcing consensus, and distinguish established knowledge from new hypotheses that require validation.
+${tallyRules}
 
 Use these exact top-level sections:
 ${headings.map((heading) => `## ${heading}`).join("\n")}`;
