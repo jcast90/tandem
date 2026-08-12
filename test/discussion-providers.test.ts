@@ -14,11 +14,12 @@ afterEach(async () => {
 });
 
 describe("discussion provider adapters", () => {
-  it("uses Codex one-shot output and Claude structured JSON without live providers", async () => {
+  it("uses one-shot Codex, Claude, and Ollama output without live providers", async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-discussion-providers-"));
     cleanup.push(root);
     const codex = join(root, "fake-codex");
     const claude = join(root, "fake-claude");
+    const ollama = join(root, "fake-ollama");
     await writeFile(
       codex,
       `#!/bin/sh
@@ -41,7 +42,14 @@ cat >/dev/null
 printf '%s' '{"result":"Claude contribution","session_id":"claude-session","usage":{"input_tokens":5,"output_tokens":7}}'
 `
     );
-    await Promise.all([chmod(codex, 0o755), chmod(claude, 0o755)]);
+    await writeFile(
+      ollama,
+      `#!/bin/sh
+prompt=$(cat)
+printf 'Ollama contribution: %s' "$prompt"
+`
+    );
+    await Promise.all([chmod(codex, 0o755), chmod(claude, 0o755), chmod(ollama, 0o755)]);
 
     const codexResult = await invokeDiscussion({
       roomId: "room",
@@ -61,6 +69,15 @@ printf '%s' '{"result":"Claude contribution","session_id":"claude-session","usag
       projectRoot: root,
       prompt: "blind prompt",
     });
+    const ollamaResult = await invokeDiscussion({
+      roomId: "room",
+      stage: "independent",
+      round: 1,
+      profile: { ...profile("ollama", "ollama-cli", ollama), model: "muse-glimmer:latest" },
+      model: null,
+      projectRoot: root,
+      prompt: "blind prompt",
+    });
 
     expect(codexResult.content).toBe("Codex contribution: blind prompt");
     expect(claudeResult).toEqual({
@@ -68,6 +85,7 @@ printf '%s' '{"result":"Claude contribution","session_id":"claude-session","usag
       providerSessionId: "claude-session",
       usage: { input_tokens: 5, output_tokens: 7 },
     });
+    expect(ollamaResult.content).toBe("Ollama contribution: blind prompt");
   });
 
   it("turns Freebuff into an explicit manual checkpoint", async () => {

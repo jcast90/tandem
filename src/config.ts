@@ -108,6 +108,15 @@ export const DEFAULT_CONFIG: TandemConfig = {
         fallbackOnly: true,
       },
     },
+    {
+      id: "local-muse-glimmer",
+      role: "utility",
+      provider: "ollama",
+      transport: "ollama-cli",
+      command: "ollama",
+      model: "muse-glimmer:latest",
+      settings: {},
+    },
   ],
   routing: {
     outer: "outer-primary",
