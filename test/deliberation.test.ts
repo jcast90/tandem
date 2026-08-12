@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { DeliberationRunner } from "../src/deliberation-runner.js";
-import { planDeliberation, synthesisContract } from "../src/deliberation.js";
+import { planDeliberation, presetForQuestion, synthesisContract } from "../src/deliberation.js";
+import type { DeliberationRoomPreset } from "../src/protocol.js";
 import { InteractiveDiscussionRequired } from "../src/providers/discussion.js";
 import type { DiscussionInvocation } from "../src/providers/discussion.js";
 import { TandemStore } from "../src/store.js";
@@ -110,6 +111,29 @@ describe("provider-neutral deliberation rooms", () => {
       blind: false,
     });
     expect(synthesisContract(plan.room)).toContain("Surviving problem cards");
+  });
+
+  it.each<[DeliberationRoomPreset, string, string]>([
+    ["decision", "This is a Decision Room", "Recommended decision"],
+    ["architecture", "This is an Architecture Room", "Architecture decision record"],
+    ["red-team", "This is a Red-Team Room", "Go or no-go conditions"],
+    ["research", "This is a Research Room", "Evidence base"],
+    ["execution-planning", "This is an Execution Planning Room", "Parallelization plan"],
+  ])("plans a five-round %s room with its own synthesis contract", (preset, prompt, heading) => {
+    const plan = planDeliberation(
+      {
+        question: "Resolve this consequential question.",
+        preset,
+        participants: [{ profileId: "outer-primary" }, { profileId: "worker-primary" }],
+        rounds: 1,
+      },
+      DEFAULT_CONFIG
+    );
+
+    expect(plan.room.rounds).toBe(5);
+    expect(plan.room.question).toContain(prompt);
+    expect(presetForQuestion(plan.room.question)).toBe(preset);
+    expect(synthesisContract(plan.room)).toContain(heading);
   });
 
   it("runs independent turns in parallel, persists every round, and returns chair synthesis", async () => {
