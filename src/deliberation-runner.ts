@@ -1,5 +1,10 @@
 import { loadConfig, resolveProfile } from "./config.js";
-import { isProblemDiscoveryRoom, planDeliberation, synthesisContract } from "./deliberation.js";
+import {
+  isProblemDiscoveryRoom,
+  planDeliberation,
+  presetForQuestion,
+  synthesisContract,
+} from "./deliberation.js";
 import type {
   DeliberationContributionRecord,
   DeliberationRoom,
@@ -339,9 +344,7 @@ function roomInput(room: DeliberationRoomRecord): DeliberationRoom {
     question: room.question,
     participants: room.participants,
     chairProfileId: room.chairProfileId,
-    preset: room.question.includes("<tandem-problem-discovery-v1>")
-      ? "problem-discovery"
-      : "general",
+    preset: presetForQuestion(room.question) ?? "general",
     rounds: room.rounds,
     maxEstimatedTokens: room.maxEstimatedTokens,
     preserveDissent: room.preserveDissent,

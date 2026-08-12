@@ -59,7 +59,16 @@ export const DeliberationParticipantSchema = z.object({
 });
 export type DeliberationParticipant = z.infer<typeof DeliberationParticipantSchema>;
 
-export const DeliberationRoomPresetSchema = z.enum(["general", "problem-discovery"]);
+export const DELIBERATION_ROOM_PRESETS = [
+  "general",
+  "problem-discovery",
+  "decision",
+  "architecture",
+  "red-team",
+  "research",
+  "execution-planning",
+] as const;
+export const DeliberationRoomPresetSchema = z.enum(DELIBERATION_ROOM_PRESETS);
 export type DeliberationRoomPreset = z.infer<typeof DeliberationRoomPresetSchema>;
 
 export const DeliberationRoomSchema = z

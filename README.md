@@ -284,6 +284,24 @@ weighs claims by evidence and how well they survived criticism, showing how the
 seed idea evolved while preserving dissent and hypotheses that still need
 validation.
 
+Choose a purpose-specific preset when the desired output is known. These rooms
+lock to the complete five-round sequence; `general` remains configurable from
+one to five rounds.
+
+| Preset               | Use it to                                                    |
+| -------------------- | ------------------------------------------------------------ |
+| `general`            | Explore an ambiguous idea and evolve the framing             |
+| `problem-discovery`  | Find evidence-backed pains and rank validation opportunities |
+| `decision`           | Compare options and make a reversible, testable choice       |
+| `architecture`       | Resolve technical design and produce an ADR                  |
+| `red-team`           | Attack a proposal and define go or no-go conditions          |
+| `research`           | Reconcile evidence, contradictions, and uncertainty          |
+| `execution-planning` | Build dependencies, parallel work, checkpoints, and rollback |
+
+From a normal `tandem chat`, ask naturally—for example, “Start an architecture
+room for this design.” Tandem selects the matching preset and returns the chair
+synthesis to the same conversation.
+
 If Ollama is installed locally, Tandem also exposes the default room participant
 `local-muse-glimmer` using `muse-glimmer:latest`. Include it like any other
 profile when asking Tandem to convene a room; it runs locally and reports no
@@ -307,13 +325,12 @@ also persist the choice as `"rounds": 5` in the room file. More rounds multiply
 provider usage, so room definitions should set a deliberate
 `maxEstimatedTokens` budget for expensive discussions.
 
-Codex and Claude turns execute concurrently inside each round using their
-authenticated CLI subscriptions. Each prompt, response, provider session ID,
-reported usage object, lifecycle event, and final synthesis is persisted in
-SQLite. Completed turns are skipped when a room resumes after an app or process
-restart. The first round is blind; later prompts use anonymized contribution
-labels rather than provider names, and the chair returns one standalone Markdown
-synthesis.
+Codex, Claude, and Ollama turns execute concurrently inside each round. Each
+prompt, response, provider session ID, reported usage object, lifecycle event,
+and final synthesis is persisted in SQLite. Completed turns are skipped when a
+room resumes after an app or process restart. The first round is blind; later
+prompts use anonymized contribution labels rather than provider names, and the
+chair returns one standalone Markdown synthesis.
 
 The current Freebuff CLI exposes an interactive terminal UI but no supported
 structured one-shot output mode. Tandem therefore records it as an
@@ -350,9 +367,9 @@ work remain available.
 
 For product research, set `preset` to `problem-discovery`. Tandem fixes the room
 at five rounds and ends with ranked problem cards instead of a product pitch.
-Codex, Claude, and Freebuff each contribute and cast one locked ballot. The
-chair's separate synthesis call reports a fixed 3-2-1 tally and cannot add a
-vote, reorder the result, or break a tie. The protocol treats
+Codex, Claude, Freebuff, and Muse Glimmer each contribute and cast one locked
+ballot. The chair's separate synthesis call reports a fixed 3-2-1 tally and
+cannot add a vote, reorder the result, or break a tie. The protocol treats
 competition, workarounds, existing spend, and buyer reachability as primary
 evidence. Google Trends comparisons are recorded as a supporting signal with
 their query, geography, time range, direction, baseline, and caveats; relative
