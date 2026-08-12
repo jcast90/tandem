@@ -7,6 +7,7 @@ export const TransportSchema = z.enum([
   "codex-cli",
   "claude-cli",
   "freebuff-cli",
+  "ollama-cli",
   "openai-api",
   "anthropic-api",
 ]);

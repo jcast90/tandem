@@ -284,6 +284,11 @@ weighs claims by evidence and how well they survived criticism, showing how the
 seed idea evolved while preserving dissent and hypotheses that still need
 validation.
 
+If Ollama is installed locally, Tandem also exposes the default room participant
+`local-muse-glimmer` using `muse-glimmer:latest`. Include it like any other
+profile when asking Tandem to convene a room; it runs locally and reports no
+subscription usage telemetry.
+
 Preview a room definition before spending provider usage:
 
 ```bash
@@ -360,7 +365,8 @@ search interest never counts as market size or willingness to pay.
   "participants": [
     { "profileId": "outer-primary" },
     { "profileId": "worker-primary" },
-    { "profileId": "fallback-freebuff" }
+    { "profileId": "fallback-freebuff" },
+    { "profileId": "local-muse-glimmer" }
   ],
   "chairProfileId": "outer-primary",
   "maxEstimatedTokens": 120000

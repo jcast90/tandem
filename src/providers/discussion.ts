@@ -38,6 +38,8 @@ export const invokeDiscussion: DiscussionInvoker = async (input) => {
       return await invokeCodex(input);
     case "claude-cli":
       return await invokeClaude(input);
+    case "ollama-cli":
+      return await invokeOllama(input);
     case "freebuff-cli":
       throw new InteractiveDiscussionRequired(input.profile.id);
     default:
@@ -83,6 +85,25 @@ async function invokeCodex(input: DiscussionInvocation): Promise<DiscussionResul
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+async function invokeOllama(input: DiscussionInvocation): Promise<DiscussionResult> {
+  const executable = findExecutable(input.profile.command);
+  if (!executable) throw new Error(`Ollama CLI not found: ${input.profile.command}`);
+  const model = input.model ?? input.profile.model;
+  if (!model) throw new Error(`Ollama profile ${input.profile.id} requires a model.`);
+  const result = await runCommand(executable, ["run", model, "--hidethinking"], {
+    cwd: input.projectRoot,
+    env: { ...sanitizeWorkerEnv(process.env), OLLAMA_NOHISTORY: "1" },
+    stdin: input.prompt,
+    timeoutMs: 30 * 60 * 1_000,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || `Ollama exited with code ${result.exitCode}.`);
+  }
+  const content = result.stdout.trim();
+  if (!content) throw new Error("Ollama completed without a room contribution.");
+  return { content, providerSessionId: null, usage: null };
 }
 
 async function invokeClaude(input: DiscussionInvocation): Promise<DiscussionResult> {
