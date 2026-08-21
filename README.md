@@ -330,6 +330,21 @@ also persist the choice as `"rounds": 5` in the room file. More rounds multiply
 provider usage, so room definitions should set a deliberate
 `maxEstimatedTokens` budget for expensive discussions.
 
+Each participant can set an ordered same-provider model fallback chain. Tandem
+only advances the chain for quota or temporary availability failures and saves
+the model that actually completed the contribution:
+
+```json
+{
+  "profileId": "outer-primary",
+  "model": "preferred-model",
+  "fallbackModels": ["second-choice", "third-choice"]
+}
+```
+
+The same list may be saved as `settings.fallbackModels` on a profile to apply to
+every room using that profile.
+
 Codex, Claude, and Ollama turns execute concurrently inside each round. Each
 prompt, response, provider session ID, reported usage object, lifecycle event,
 and final synthesis is persisted in SQLite. Completed turns are skipped when a

@@ -18,7 +18,7 @@ import {
   invokeDiscussion,
   type DiscussionInvoker,
 } from "./providers/discussion.js";
-import { classifyProviderFailure } from "./provider-failures.js";
+import { classifyProviderFailure, shouldFallbackProviderFailure } from "./provider-failures.js";
 import { TandemStore } from "./store.js";
 
 export class DeliberationRunner {
@@ -88,6 +88,7 @@ export class DeliberationRunner {
             room,
             profile,
             participant?.model ?? profile.model,
+            participant?.fallbackModels ?? [],
             contribution
           );
         })
@@ -213,6 +214,7 @@ export class DeliberationRunner {
     room: DeliberationRoomRecord,
     profile: Profile,
     model: string | null,
+    fallbackModels: string[],
     contribution: DeliberationContributionRecord
   ): Promise<"completed" | "awaiting_input" | "failed"> {
     this.store.updateDeliberationContribution(contribution.id, {
@@ -224,59 +226,80 @@ export class DeliberationRunner {
       stage: contribution.stage,
       round: contribution.round,
     });
-    try {
-      const result = await (this.options.invoke ?? invokeDiscussion)({
-        roomId: room.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        profile,
-        model,
-        projectRoot: room.projectRoot,
-        prompt: contribution.prompt,
-      });
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "completed",
-        content: result.content,
-        providerSessionId: result.providerSessionId,
-        usage: result.usage,
-        error: null,
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
-        profileId: profile.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        source: "provider",
-      });
-      return "completed";
-    } catch (error) {
-      if (error instanceof InteractiveDiscussionRequired) {
-        this.store.updateDeliberationContribution(contribution.id, {
-          status: "awaiting_input",
-          error: error.message,
+    const models = modelCandidates(model, fallbackModels, profile.settings.fallbackModels);
+    for (const [index, candidate] of models.entries()) {
+      try {
+        const result = await (this.options.invoke ?? invokeDiscussion)({
+          roomId: room.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          profile,
+          model: candidate,
+          projectRoot: room.projectRoot,
+          prompt: contribution.prompt,
         });
-        this.store.appendDeliberationEvent(
-          room.id,
-          contribution.id,
-          "contribution.awaiting_input",
-          {
-            profileId: profile.id,
-            stage: contribution.stage,
-            round: contribution.round,
-          }
-        );
-        return "awaiting_input";
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "completed",
+          model: candidate,
+          content: result.content,
+          providerSessionId: result.providerSessionId,
+          usage: result.usage,
+          error: null,
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
+          profileId: profile.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          source: "provider",
+          model: candidate,
+        });
+        return "completed";
+      } catch (error) {
+        if (error instanceof InteractiveDiscussionRequired) {
+          this.store.updateDeliberationContribution(contribution.id, {
+            status: "awaiting_input",
+            error: error.message,
+          });
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.awaiting_input",
+            {
+              profileId: profile.id,
+              stage: contribution.stage,
+              round: contribution.round,
+            }
+          );
+          return "awaiting_input";
+        }
+        const nextModel = models[index + 1];
+        if (nextModel !== undefined && shouldFallbackProviderFailure(error)) {
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.model_fallback",
+            {
+              profileId: profile.id,
+              fromModel: candidate,
+              toModel: nextModel,
+              reason: classifyProviderFailure(error),
+            }
+          );
+          continue;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "failed",
+          error: message,
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
+          profileId: profile.id,
+          error: message,
+        });
+        return "failed";
       }
-      const message = error instanceof Error ? error.message : String(error);
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "failed",
-        error: message,
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
-        profileId: profile.id,
-        error: message,
-      });
-      return "failed";
     }
+    return "failed";
   }
 
   private buildPrompt(
@@ -404,6 +427,21 @@ function participantAlias(room: DeliberationRoomRecord, profileId: string): stri
 
 function isTerminal(status: DeliberationRoomRecord["status"]): boolean {
   return ["completed", "failed", "canceled"].includes(status);
+}
+
+function modelCandidates(
+  model: string | null,
+  roomFallbacks: string[],
+  profileFallbacks: unknown
+): Array<string | null> {
+  const configured = Array.isArray(profileFallbacks)
+    ? profileFallbacks.filter(
+        (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0
+      )
+    : [];
+  return [model, ...roomFallbacks, ...configured].filter(
+    (candidate, index, candidates) => candidates.indexOf(candidate) === index
+  );
 }
 
 function unavailableProfiles(contributions: DeliberationContributionRecord[]): Set<string> {

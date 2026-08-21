@@ -56,6 +56,7 @@ export type TaskRoutingRule = z.infer<typeof TaskRoutingRuleSchema>;
 export const DeliberationParticipantSchema = z.object({
   profileId: z.string().min(1),
   model: z.string().min(1).nullable().default(null),
+  fallbackModels: z.array(z.string().min(1)).max(4).optional(),
 });
 export type DeliberationParticipant = z.infer<typeof DeliberationParticipantSchema>;
 

@@ -31039,7 +31039,8 @@ var TaskRoutingRuleSchema = external_exports.object({
 });
 var DeliberationParticipantSchema = external_exports.object({
   profileId: external_exports.string().min(1),
-  model: external_exports.string().min(1).nullable().default(null)
+  model: external_exports.string().min(1).nullable().default(null),
+  fallbackModels: external_exports.array(external_exports.string().min(1)).max(4).optional()
 });
 var DELIBERATION_ROOM_PRESETS = [
   "general",
@@ -31908,6 +31909,10 @@ function classifyProviderFailure(error51) {
   }
   return "unknown";
 }
+function shouldFallbackProviderFailure(error51) {
+  const kind = classifyProviderFailure(error51);
+  return kind === "quota_exhausted" || kind === "temporarily_unavailable";
+}
 
 // src/deliberation-runner.ts
 var DeliberationRunner = class {
@@ -31969,6 +31974,7 @@ var DeliberationRunner = class {
             room,
             profile,
             participant?.model ?? profile.model,
+            participant?.fallbackModels ?? [],
             contribution
           );
         })
@@ -32074,7 +32080,7 @@ var DeliberationRunner = class {
     this.store.appendDeliberationEvent(room.id, null, "room.canceled", {});
     return canceled;
   }
-  async invokeContribution(room, profile, model, contribution) {
+  async invokeContribution(room, profile, model, fallbackModels, contribution) {
     this.store.updateDeliberationContribution(contribution.id, {
       status: "running",
       error: null
@@ -32084,59 +32090,80 @@ var DeliberationRunner = class {
       stage: contribution.stage,
       round: contribution.round
     });
-    try {
-      const result = await (this.options.invoke ?? invokeDiscussion)({
-        roomId: room.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        profile,
-        model,
-        projectRoot: room.projectRoot,
-        prompt: contribution.prompt
-      });
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "completed",
-        content: result.content,
-        providerSessionId: result.providerSessionId,
-        usage: result.usage,
-        error: null
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
-        profileId: profile.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        source: "provider"
-      });
-      return "completed";
-    } catch (error51) {
-      if (error51 instanceof InteractiveDiscussionRequired) {
-        this.store.updateDeliberationContribution(contribution.id, {
-          status: "awaiting_input",
-          error: error51.message
+    const models = modelCandidates(model, fallbackModels, profile.settings.fallbackModels);
+    for (const [index, candidate] of models.entries()) {
+      try {
+        const result = await (this.options.invoke ?? invokeDiscussion)({
+          roomId: room.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          profile,
+          model: candidate,
+          projectRoot: room.projectRoot,
+          prompt: contribution.prompt
         });
-        this.store.appendDeliberationEvent(
-          room.id,
-          contribution.id,
-          "contribution.awaiting_input",
-          {
-            profileId: profile.id,
-            stage: contribution.stage,
-            round: contribution.round
-          }
-        );
-        return "awaiting_input";
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "completed",
+          model: candidate,
+          content: result.content,
+          providerSessionId: result.providerSessionId,
+          usage: result.usage,
+          error: null
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
+          profileId: profile.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          source: "provider",
+          model: candidate
+        });
+        return "completed";
+      } catch (error51) {
+        if (error51 instanceof InteractiveDiscussionRequired) {
+          this.store.updateDeliberationContribution(contribution.id, {
+            status: "awaiting_input",
+            error: error51.message
+          });
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.awaiting_input",
+            {
+              profileId: profile.id,
+              stage: contribution.stage,
+              round: contribution.round
+            }
+          );
+          return "awaiting_input";
+        }
+        const nextModel = models[index + 1];
+        if (nextModel !== void 0 && shouldFallbackProviderFailure(error51)) {
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.model_fallback",
+            {
+              profileId: profile.id,
+              fromModel: candidate,
+              toModel: nextModel,
+              reason: classifyProviderFailure(error51)
+            }
+          );
+          continue;
+        }
+        const message = error51 instanceof Error ? error51.message : String(error51);
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "failed",
+          error: message
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
+          profileId: profile.id,
+          error: message
+        });
+        return "failed";
       }
-      const message = error51 instanceof Error ? error51.message : String(error51);
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "failed",
-        error: message
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
-        profileId: profile.id,
-        error: message
-      });
-      return "failed";
     }
+    return "failed";
   }
   buildPrompt(room, stage, round, profileId) {
     const alias = stage === "synthesis" ? "the chair" : participantAlias(room, profileId);
@@ -32241,6 +32268,14 @@ function participantAlias(room, profileId) {
 }
 function isTerminal2(status) {
   return ["completed", "failed", "canceled"].includes(status);
+}
+function modelCandidates(model, roomFallbacks, profileFallbacks) {
+  const configured = Array.isArray(profileFallbacks) ? profileFallbacks.filter(
+    (candidate) => typeof candidate === "string" && candidate.length > 0
+  ) : [];
+  return [model, ...roomFallbacks, ...configured].filter(
+    (candidate, index, candidates) => candidates.indexOf(candidate) === index
+  );
 }
 function unavailableProfiles(contributions) {
   return new Set(
@@ -32875,6 +32910,7 @@ var TandemStore = class {
       DeliberationContributionStatusSchema.parse(patch.status);
       add("status", patch.status);
     }
+    if (patch.model !== void 0) add("model", patch.model);
     if (patch.content !== void 0) add("content", patch.content);
     if (patch.providerSessionId !== void 0) add("provider_session_id", patch.providerSessionId);
     if (patch.usage !== void 0)
@@ -34532,7 +34568,7 @@ function workOrderFromInput(input) {
 // src/mcp-server.ts
 var projectRoot = process.env.TANDEM_PROJECT_ROOT ?? process.cwd();
 var service = new TandemService();
-var instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Treat every <tandem-routing> directive as authoritative. Goal IDs supplied by that directive are already durable and authoritative: use outer_goal_id for the conversation objective and pass worker_goal_id unchanged as goal_id. Preserve task_class, profile_id, model, effort, and the unified ask/auto/full permission mode when delegating; omit permission_mode to inherit the active Tandem session policy and never invent provider-specific permission strings. For every substantial request, assess whether two or more independent modifying workstreams can run concurrently. Use tandem_run_create for a bounded dependency plan when multiple worker tasks are worthwhile; classify every task, declare write_scope, dependencies, concurrency, token, task-count, and wall-time budgets. Tandem serializes uncertain or overlapping write scopes and integrates completed worker commits in an isolated worktree. Use tandem_delegate for one bounded worker task. Git is required only for modifying worker delegation and execution runs. Discussion rooms are read-only and work in any readable directory, including a folder containing only attached reference documents; never refuse or stall a room because the current workspace is not a Git repository. Room participants do not inherit outer-chat attachments, so when the user supplies a document, read it first and include the relevant contents or a faithful extract in the room question. Use tandem_room_create only when independent model perspectives and structured critique are likely to improve a consequential or genuinely ambiguous decision; do not convene a room for routine work. Choose the room preset from intent: problem-discovery finds evidence-backed pains, decision compares choices, architecture resolves technical design, red-team attacks a proposal, research reconciles evidence, execution-planning creates a dependency plan, and general handles everything else. Unless the user specifies a different panel, use outer-primary, worker-primary, fallback-freebuff, and local-muse-glimmer as room participants. After creating a room, call tandem_room_wait repeatedly without asking the user whether to continue, setting after_event_id to the returned latest_event_id, until the room is completed, failed, canceled, or awaiting input; then return the chair synthesis as one provider-neutral response. When provider=claude, do not edit files or run implementation commands yourself: perform only minimal read-only inspection and delegate. When mode=codex, keep the request with Codex. Give workers explicit acceptance criteria and only the context they need. Do not instruct workers to create commits; Tandem normalizes completed work. Monitor runs with tandem_run_wait and tasks with tandem_task_wait. Briefly relay meaningful progress and surface questions without provider jargon. Review isolated evidence before claiming completion. Never apply a task or run automatically to the user's checkout.`;
+var instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Treat every <tandem-routing> directive as authoritative. Goal IDs supplied by that directive are already durable and authoritative: use outer_goal_id for the conversation objective and pass worker_goal_id unchanged as goal_id. Preserve task_class, profile_id, model, effort, and the unified ask/auto/full permission mode when delegating; omit permission_mode to inherit the active Tandem session policy and never invent provider-specific permission strings. For every substantial request, assess whether two or more independent modifying workstreams can run concurrently. Use tandem_run_create for a bounded dependency plan when multiple worker tasks are worthwhile; classify every task, declare write_scope, dependencies, concurrency, token, task-count, and wall-time budgets. Tandem serializes uncertain or overlapping write scopes and integrates completed worker commits in an isolated worktree. Use tandem_delegate for one bounded worker task. Git is required only for modifying worker delegation and execution runs. Discussion rooms are read-only and work in any readable directory, including a folder containing only attached reference documents; never refuse or stall a room because the current workspace is not a Git repository. Room participants do not inherit outer-chat attachments, so when the user supplies a document, read it first and include the relevant contents or a faithful extract in the room question. Use tandem_room_create only when independent model perspectives and structured critique are likely to improve a consequential or genuinely ambiguous decision; do not convene a room for routine work. Choose the room preset from intent: problem-discovery finds evidence-backed pains, decision compares choices, architecture resolves technical design, red-team attacks a proposal, research reconciles evidence, execution-planning creates a dependency plan, and general handles everything else. Unless the user specifies a different panel, use outer-primary, worker-primary, fallback-freebuff, and local-muse-glimmer as room participants. If the user names alternate models, pass them in fallback_models in preferred order; Tandem retries them only for quota or temporary availability failures. After creating a room, call tandem_room_wait repeatedly without asking the user whether to continue, setting after_event_id to the returned latest_event_id, until the room is completed, failed, canceled, or awaiting input; then return the chair synthesis as one provider-neutral response. When provider=claude, do not edit files or run implementation commands yourself: perform only minimal read-only inspection and delegate. When mode=codex, keep the request with Codex. Give workers explicit acceptance criteria and only the context they need. Do not instruct workers to create commits; Tandem normalizes completed work. Monitor runs with tandem_run_wait and tasks with tandem_task_wait. Briefly relay meaningful progress and surface questions without provider jargon. Review isolated evidence before claiming completion. Never apply a task or run automatically to the user's checkout.`;
 var server = new McpServer(
   {
     name: "tandem",
@@ -34553,7 +34589,8 @@ server.registerTool(
       participants: external_exports.array(
         external_exports.object({
           profile_id: external_exports.string().min(1),
-          model: external_exports.string().min(1).optional()
+          model: external_exports.string().min(1).optional(),
+          fallback_models: external_exports.array(external_exports.string().min(1)).max(4).optional()
         })
       ).min(2).max(5),
       chair_profile_id: external_exports.string().min(1).optional(),
@@ -34577,7 +34614,8 @@ server.registerTool(
         preset: preset ?? "general",
         participants: participants.map((participant) => ({
           profileId: participant.profile_id,
-          model: participant.model ?? null
+          model: participant.model ?? null,
+          fallbackModels: participant.fallback_models ?? []
         })),
         chairProfileId: chair_profile_id ?? null,
         rounds: rounds ?? 2,

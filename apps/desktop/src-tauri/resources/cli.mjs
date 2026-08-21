@@ -14569,7 +14569,8 @@ var TaskRoutingRuleSchema = external_exports.object({
 });
 var DeliberationParticipantSchema = external_exports.object({
   profileId: external_exports.string().min(1),
-  model: external_exports.string().min(1).nullable().default(null)
+  model: external_exports.string().min(1).nullable().default(null),
+  fallbackModels: external_exports.array(external_exports.string().min(1)).max(4).optional()
 });
 var DELIBERATION_ROOM_PRESETS = [
   "general",
@@ -16190,6 +16191,7 @@ var TandemStore = class {
       DeliberationContributionStatusSchema.parse(patch.status);
       add("status", patch.status);
     }
+    if (patch.model !== void 0) add("model", patch.model);
     if (patch.content !== void 0) add("content", patch.content);
     if (patch.providerSessionId !== void 0) add("provider_session_id", patch.providerSessionId);
     if (patch.usage !== void 0)
@@ -17876,6 +17878,7 @@ var DeliberationRunner = class {
             room,
             profile,
             participant?.model ?? profile.model,
+            participant?.fallbackModels ?? [],
             contribution
           );
         })
@@ -17981,7 +17984,7 @@ var DeliberationRunner = class {
     this.store.appendDeliberationEvent(room.id, null, "room.canceled", {});
     return canceled;
   }
-  async invokeContribution(room, profile, model, contribution) {
+  async invokeContribution(room, profile, model, fallbackModels, contribution) {
     this.store.updateDeliberationContribution(contribution.id, {
       status: "running",
       error: null
@@ -17991,59 +17994,80 @@ var DeliberationRunner = class {
       stage: contribution.stage,
       round: contribution.round
     });
-    try {
-      const result = await (this.options.invoke ?? invokeDiscussion)({
-        roomId: room.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        profile,
-        model,
-        projectRoot: room.projectRoot,
-        prompt: contribution.prompt
-      });
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "completed",
-        content: result.content,
-        providerSessionId: result.providerSessionId,
-        usage: result.usage,
-        error: null
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
-        profileId: profile.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        source: "provider"
-      });
-      return "completed";
-    } catch (error51) {
-      if (error51 instanceof InteractiveDiscussionRequired) {
-        this.store.updateDeliberationContribution(contribution.id, {
-          status: "awaiting_input",
-          error: error51.message
+    const models = modelCandidates(model, fallbackModels, profile.settings.fallbackModels);
+    for (const [index, candidate] of models.entries()) {
+      try {
+        const result = await (this.options.invoke ?? invokeDiscussion)({
+          roomId: room.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          profile,
+          model: candidate,
+          projectRoot: room.projectRoot,
+          prompt: contribution.prompt
         });
-        this.store.appendDeliberationEvent(
-          room.id,
-          contribution.id,
-          "contribution.awaiting_input",
-          {
-            profileId: profile.id,
-            stage: contribution.stage,
-            round: contribution.round
-          }
-        );
-        return "awaiting_input";
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "completed",
+          model: candidate,
+          content: result.content,
+          providerSessionId: result.providerSessionId,
+          usage: result.usage,
+          error: null
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
+          profileId: profile.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          source: "provider",
+          model: candidate
+        });
+        return "completed";
+      } catch (error51) {
+        if (error51 instanceof InteractiveDiscussionRequired) {
+          this.store.updateDeliberationContribution(contribution.id, {
+            status: "awaiting_input",
+            error: error51.message
+          });
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.awaiting_input",
+            {
+              profileId: profile.id,
+              stage: contribution.stage,
+              round: contribution.round
+            }
+          );
+          return "awaiting_input";
+        }
+        const nextModel = models[index + 1];
+        if (nextModel !== void 0 && shouldFallbackProviderFailure(error51)) {
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.model_fallback",
+            {
+              profileId: profile.id,
+              fromModel: candidate,
+              toModel: nextModel,
+              reason: classifyProviderFailure(error51)
+            }
+          );
+          continue;
+        }
+        const message = error51 instanceof Error ? error51.message : String(error51);
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "failed",
+          error: message
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
+          profileId: profile.id,
+          error: message
+        });
+        return "failed";
       }
-      const message = error51 instanceof Error ? error51.message : String(error51);
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "failed",
-        error: message
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
-        profileId: profile.id,
-        error: message
-      });
-      return "failed";
     }
+    return "failed";
   }
   buildPrompt(room, stage, round, profileId) {
     const alias = stage === "synthesis" ? "the chair" : participantAlias(room, profileId);
@@ -18148,6 +18172,14 @@ function participantAlias(room, profileId) {
 }
 function isTerminal(status2) {
   return ["completed", "failed", "canceled"].includes(status2);
+}
+function modelCandidates(model, roomFallbacks, profileFallbacks) {
+  const configured = Array.isArray(profileFallbacks) ? profileFallbacks.filter(
+    (candidate) => typeof candidate === "string" && candidate.length > 0
+  ) : [];
+  return [model, ...roomFallbacks, ...configured].filter(
+    (candidate, index, candidates) => candidates.indexOf(candidate) === index
+  );
 }
 function unavailableProfiles(contributions) {
   return new Set(

@@ -273,6 +273,65 @@ describe("provider-neutral deliberation rooms", () => {
     store.close();
   });
 
+  it("retries quota failures with the participant's next model", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-room-model-fallback-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const room = store.createDeliberationRoom({
+      projectRoot: root,
+      question: "Use another model when the preferred model is exhausted.",
+      participants: [
+        {
+          profileId: "outer-primary",
+          model: "gpt-primary",
+          fallbackModels: ["gpt-backup"],
+        },
+        { profileId: "worker-primary", model: null },
+      ],
+      chairProfileId: "outer-primary",
+      rounds: 1,
+      maxEstimatedTokens: 20_000,
+      preserveDissent: true,
+    });
+    const invocations: DiscussionInvocation[] = [];
+    const runner = new DeliberationRunner(store, {
+      loadConfig: async () => DEFAULT_CONFIG,
+      invoke: async (input) => {
+        invocations.push(input);
+        if (input.profile.id === "outer-primary" && input.model === "gpt-primary") {
+          throw new Error("Usage limit reached.");
+        }
+        return {
+          content:
+            input.stage === "synthesis"
+              ? "## Shared conclusions\nThe backup model completed synthesis."
+              : `${input.profile.id} response`,
+          providerSessionId: null,
+          usage: null,
+        };
+      },
+    });
+
+    expect((await runner.run(room.id)).status).toBe("completed");
+    expect(
+      invocations
+        .filter((input) => input.profile.id === "outer-primary")
+        .map((input) => input.model)
+    ).toEqual(["gpt-primary", "gpt-backup", "gpt-primary", "gpt-backup"]);
+    expect(
+      store
+        .listDeliberationContributions(room.id)
+        .filter((item) => item.profileId === "outer-primary")
+        .every((item) => item.model === "gpt-backup")
+    ).toBe(true);
+    expect(
+      store
+        .listDeliberationEvents(room.id)
+        .filter((event) => event.type === "contribution.model_fallback")
+    ).toHaveLength(2);
+    store.close();
+  });
+
   it("accepts early manual input without scheduling duplicate contributions", async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-room-manual-race-"));
     cleanup.push(root);
