@@ -32200,7 +32200,7 @@ import { mkdir as mkdir2 } from "node:fs/promises";
 import { join as join4, resolve as resolve2 } from "node:path";
 import { spawn as spawn2 } from "node:child_process";
 function defaultRunnerEntry(argvEntry = process.argv[1]) {
-  return argvEntry && !argvEntry.endsWith(".ts") ? resolve2(argvEntry) : join4(packageRoot(), "dist", "cli.js");
+  return argvEntry && !argvEntry.endsWith(".ts") && !argvEntry.match(/mcp-server\.(?:js|mjs)$/) ? resolve2(argvEntry) : join4(packageRoot(), "dist", "cli.js");
 }
 var CMUX_CANDIDATES = [
   "/Applications/cmux.app/Contents/Resources/bin/cmux",

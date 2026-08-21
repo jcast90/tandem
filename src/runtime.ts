@@ -13,7 +13,7 @@ export interface RuntimeLaunch {
 }
 
 export function defaultRunnerEntry(argvEntry = process.argv[1]): string {
-  return argvEntry && !argvEntry.endsWith(".ts")
+  return argvEntry && !argvEntry.endsWith(".ts") && !argvEntry.match(/mcp-server\.(?:js|mjs)$/)
     ? resolve(argvEntry)
     : join(packageRoot(), "dist", "cli.js");
 }
