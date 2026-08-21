@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeWorkerEnv, shellQuote } from "../src/process.js";
+import { runCommand, sanitizeWorkerEnv, shellQuote } from "../src/process.js";
 
 describe("process safety helpers", () => {
   it("does not forward ambient secrets to workers", () => {
@@ -25,5 +25,15 @@ describe("process safety helpers", () => {
 
   it("quotes shell arguments containing apostrophes", () => {
     expect(shellQuote("it's safe")).toBe(`'it'\"'\"'s safe'`);
+  });
+
+  it("force-stops commands that ignore their timeout signal", async () => {
+    await expect(
+      runCommand(
+        process.execPath,
+        ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+        { timeoutMs: 100 }
+      )
+    ).rejects.toThrow("Command timed out");
   });
 });

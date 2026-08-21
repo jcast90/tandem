@@ -31654,9 +31654,11 @@ async function runCommand(command, args, options = {}) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let forceKill;
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
+      forceKill = setTimeout(() => child.kill("SIGKILL"), 1e3);
     }, options.timeoutMs ?? 3e5);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -31666,10 +31668,12 @@ async function runCommand(command, args, options = {}) {
     });
     child.on("error", (error51) => {
       clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
       reject(error51);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
       if (timedOut) {
         reject(new Error(`Command timed out: ${command}`));
         return;

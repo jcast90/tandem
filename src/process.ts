@@ -27,9 +27,11 @@ export async function runCommand(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let forceKill: NodeJS.Timeout | undefined;
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
+      forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
     }, options.timeoutMs ?? 300_000);
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -40,10 +42,12 @@ export async function runCommand(
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
       reject(error);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
       if (timedOut) {
         reject(new Error(`Command timed out: ${command}`));
         return;
