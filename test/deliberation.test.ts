@@ -10,6 +10,7 @@ import { planDeliberation, presetForQuestion, synthesisContract } from "../src/d
 import type { DeliberationRoomPreset } from "../src/protocol.js";
 import { InteractiveDiscussionRequired } from "../src/providers/discussion.js";
 import type { DiscussionInvocation } from "../src/providers/discussion.js";
+import { runCommand } from "../src/process.js";
 import { TandemStore } from "../src/store.js";
 
 const cleanup: string[] = [];
@@ -139,6 +140,9 @@ describe("provider-neutral deliberation rooms", () => {
   it("runs independent turns in parallel, persists every round, and returns chair synthesis", async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-room-runner-"));
     cleanup.push(root);
+    expect(
+      (await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: root })).exitCode
+    ).not.toBe(0);
     const store = new TandemStore(join(root, "state.sqlite"));
     const room = store.createDeliberationRoom({
       projectRoot: root,

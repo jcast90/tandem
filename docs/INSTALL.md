@@ -117,7 +117,7 @@ Contributors can run the compiled CLI directly:
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
 node bin/tandem.mjs doctor
-node bin/tandem.mjs chat --cd /path/to/a/clean/git/repository
+node bin/tandem.mjs chat --cd /path/to/any/readable/directory
 ```
 
 If pnpm 11 is installed directly, replace `corepack pnpm` with `pnpm`.

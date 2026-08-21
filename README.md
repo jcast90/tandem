@@ -33,7 +33,7 @@ local build is required.
 
 | Requirement                                                                   | Version                | Why it is needed                                    |
 | ----------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------- |
-| [Git](https://git-scm.com/downloads)                                          | Current                | Isolated worker branches and worktrees              |
+| [Git](https://git-scm.com/downloads)                                          | Current                | Only for modifying workers and execution runs       |
 | [Node.js](https://nodejs.org/)                                                | 22.13 or newer         | Tandem CLI and built-in SQLite ledger               |
 | [Codex CLI](https://developers.openai.com/codex/cli)                          | Current, authenticated | Default conversation, planning, and review provider |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started) | Current, authenticated | Default implementation worker                       |
@@ -77,12 +77,15 @@ tandem setup
 tandem doctor
 ```
 
-Then start Tandem inside a clean Git repository:
+Then start Tandem in any readable directory:
 
 ```bash
-cd ~/projects/my-app
+cd ~/Documents/reference-material
 tandem chat
 ```
+
+Normal chat and discussion rooms do not require Git. Only modifying worker
+delegation and execution runs require a clean Git repository.
 
 For contributor builds, release operations, uninstalling, and platform notes,
 see [Installation](docs/INSTALL.md). For common first-run problems, see
@@ -208,12 +211,14 @@ the corresponding CLI's configured default remains authoritative.
 
 ## First run
 
-Start in a clean Git repository:
+Start in any readable directory:
 
 ```bash
-cd ~/projects/my-app
+cd ~/Documents/reference-material
 tandem chat
 ```
+
+Use a clean Git repository only when asking Tandem to delegate modifying work.
 
 You can also seed the outer conversation:
 

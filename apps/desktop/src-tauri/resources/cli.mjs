@@ -19007,7 +19007,7 @@ async function setup() {
   await saveConfig(config2);
   console.log(`
 Saved ${configPath()}`);
-  console.log("Run `tandem doctor`, then `tandem chat` inside a clean Git repository.");
+  console.log("Run `tandem doctor`, then `tandem chat` in any readable directory.");
 }
 async function doctor() {
   const config2 = await loadConfig();
