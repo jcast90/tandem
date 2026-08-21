@@ -220,13 +220,14 @@ export class TandemService {
   async waitForDeliberationRoom(
     roomId: string,
     afterEventId = 0,
-    timeoutSeconds = 25
+    timeoutSeconds = 25,
+    untilTerminal = false
   ): Promise<DeliberationSnapshot> {
     const deadline = Date.now() + Math.min(Math.max(timeoutSeconds, 0), 30) * 1_000;
     while (true) {
       const snapshot = this.getDeliberationRoom(roomId, afterEventId);
       if (
-        snapshot.events.length > 0 ||
+        (!untilTerminal && snapshot.events.length > 0) ||
         ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) ||
         Date.now() >= deadline
       ) {

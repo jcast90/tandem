@@ -11,6 +11,7 @@ import type { DeliberationRoomPreset } from "../src/protocol.js";
 import { InteractiveDiscussionRequired } from "../src/providers/discussion.js";
 import type { DiscussionInvocation } from "../src/providers/discussion.js";
 import { runCommand } from "../src/process.js";
+import { TandemService } from "../src/service.js";
 import { TandemStore } from "../src/store.js";
 
 const cleanup: string[] = [];
@@ -193,6 +194,36 @@ describe("provider-neutral deliberation rooms", () => {
     expect(critique?.prompt).toContain("### Member A (round 1, independent)");
     expect(store.listDeliberationEvents(room.id).at(-1)?.type).toBe("room.completed");
     store.close();
+  });
+
+  it("coalesces intermediate room events while waiting for completion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-room-wait-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const service = new TandemService(store);
+    const room = store.createDeliberationRoom({
+      projectRoot: root,
+      question: "Wait for every contribution.",
+      participants: [
+        { profileId: "outer-primary", model: null },
+        { profileId: "worker-primary", model: null },
+      ],
+      chairProfileId: "outer-primary",
+      rounds: 1,
+      maxEstimatedTokens: 20_000,
+      preserveDissent: true,
+    });
+    store.appendDeliberationEvent(room.id, null, "round.started", { round: 1 });
+    setTimeout(() => {
+      store.updateDeliberationRoom(room.id, { status: "completed", synthesis: "Done." });
+      store.appendDeliberationEvent(room.id, null, "room.completed", {});
+    }, 20);
+
+    const snapshot = await service.waitForDeliberationRoom(room.id, 0, 1, true);
+
+    expect(snapshot.room.status).toBe("completed");
+    expect(snapshot.events.at(-1)?.type).toBe("room.completed");
+    service.close();
   });
 
   it("gives five-round rooms distinct challenge, learning, and falsification prompts", async () => {

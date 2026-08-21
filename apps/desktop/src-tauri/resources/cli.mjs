@@ -18241,11 +18241,11 @@ var TandemService = class {
   listDeliberationRooms(limit = 50) {
     return this.store.listDeliberationRooms(limit);
   }
-  async waitForDeliberationRoom(roomId, afterEventId = 0, timeoutSeconds = 25) {
+  async waitForDeliberationRoom(roomId, afterEventId = 0, timeoutSeconds = 25, untilTerminal = false) {
     const deadline = Date.now() + Math.min(Math.max(timeoutSeconds, 0), 30) * 1e3;
     while (true) {
       const snapshot = this.getDeliberationRoom(roomId, afterEventId);
-      if (snapshot.events.length > 0 || ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) || Date.now() >= deadline) {
+      if (!untilTerminal && snapshot.events.length > 0 || ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) || Date.now() >= deadline) {
         return snapshot;
       }
       await new Promise((resolve5) => setTimeout(resolve5, 300));

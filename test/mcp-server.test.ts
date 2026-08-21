@@ -56,6 +56,9 @@ describe("Tandem MCP server", () => {
       expect(tools.tools.find((tool) => tool.name === "tandem_room_create")?.description).toContain(
         "Git is not required"
       );
+      expect(tools.tools.find((tool) => tool.name === "tandem_room_wait")?.description).toContain(
+        "without asking the user"
+      );
 
       const result = await client.callTool({
         name: "tandem_goal_create",

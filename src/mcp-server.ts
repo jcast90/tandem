@@ -3,12 +3,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { DELIBERATION_ROOM_PRESETS } from "./protocol.js";
-import { TandemService, workOrderFromInput } from "./service.js";
+import { TandemService, workOrderFromInput, type DeliberationSnapshot } from "./service.js";
 
 const projectRoot = process.env.TANDEM_PROJECT_ROOT ?? process.cwd();
 const service = new TandemService();
 
-const instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Treat every <tandem-routing> directive as authoritative. Goal IDs supplied by that directive are already durable and authoritative: use outer_goal_id for the conversation objective and pass worker_goal_id unchanged as goal_id. Preserve task_class, profile_id, model, effort, and the unified ask/auto/full permission mode when delegating; omit permission_mode to inherit the active Tandem session policy and never invent provider-specific permission strings. For every substantial request, assess whether two or more independent modifying workstreams can run concurrently. Use tandem_run_create for a bounded dependency plan when multiple worker tasks are worthwhile; classify every task, declare write_scope, dependencies, concurrency, token, task-count, and wall-time budgets. Tandem serializes uncertain or overlapping write scopes and integrates completed worker commits in an isolated worktree. Use tandem_delegate for one bounded worker task. Git is required only for modifying worker delegation and execution runs. Discussion rooms are read-only and work in any readable directory, including a folder containing only attached reference documents; never refuse or stall a room because the current workspace is not a Git repository. Room participants do not inherit outer-chat attachments, so when the user supplies a document, read it first and include the relevant contents or a faithful extract in the room question. Use tandem_room_create only when independent model perspectives and structured critique are likely to improve a consequential or genuinely ambiguous decision; do not convene a room for routine work. Choose the room preset from intent: problem-discovery finds evidence-backed pains, decision compares choices, architecture resolves technical design, red-team attacks a proposal, research reconciles evidence, execution-planning creates a dependency plan, and general handles everything else. Unless the user specifies a different panel, use outer-primary, worker-primary, fallback-freebuff, and local-muse-glimmer as room participants. Monitor rooms with tandem_room_wait and return the chair synthesis as one provider-neutral response. When provider=claude, do not edit files or run implementation commands yourself: perform only minimal read-only inspection and delegate. When mode=codex, keep the request with Codex. Give workers explicit acceptance criteria and only the context they need. Do not instruct workers to create commits; Tandem normalizes completed work. Monitor runs with tandem_run_wait and tasks with tandem_task_wait. Briefly relay meaningful progress and surface questions without provider jargon. Review isolated evidence before claiming completion. Never apply a task or run automatically to the user's checkout.`;
+const instructions = `Tandem makes you the outer conversational agent. Own discussion, research, planning, task decomposition, and evidence-based review. Treat every <tandem-routing> directive as authoritative. Goal IDs supplied by that directive are already durable and authoritative: use outer_goal_id for the conversation objective and pass worker_goal_id unchanged as goal_id. Preserve task_class, profile_id, model, effort, and the unified ask/auto/full permission mode when delegating; omit permission_mode to inherit the active Tandem session policy and never invent provider-specific permission strings. For every substantial request, assess whether two or more independent modifying workstreams can run concurrently. Use tandem_run_create for a bounded dependency plan when multiple worker tasks are worthwhile; classify every task, declare write_scope, dependencies, concurrency, token, task-count, and wall-time budgets. Tandem serializes uncertain or overlapping write scopes and integrates completed worker commits in an isolated worktree. Use tandem_delegate for one bounded worker task. Git is required only for modifying worker delegation and execution runs. Discussion rooms are read-only and work in any readable directory, including a folder containing only attached reference documents; never refuse or stall a room because the current workspace is not a Git repository. Room participants do not inherit outer-chat attachments, so when the user supplies a document, read it first and include the relevant contents or a faithful extract in the room question. Use tandem_room_create only when independent model perspectives and structured critique are likely to improve a consequential or genuinely ambiguous decision; do not convene a room for routine work. Choose the room preset from intent: problem-discovery finds evidence-backed pains, decision compares choices, architecture resolves technical design, red-team attacks a proposal, research reconciles evidence, execution-planning creates a dependency plan, and general handles everything else. Unless the user specifies a different panel, use outer-primary, worker-primary, fallback-freebuff, and local-muse-glimmer as room participants. After creating a room, call tandem_room_wait repeatedly without asking the user whether to continue, setting after_event_id to the returned latest_event_id, until the room is completed, failed, canceled, or awaiting input; then return the chair synthesis as one provider-neutral response. When provider=claude, do not edit files or run implementation commands yourself: perform only minimal read-only inspection and delegate. When mode=codex, keep the request with Codex. Give workers explicit acceptance criteria and only the context they need. Do not instruct workers to create commits; Tandem normalizes completed work. Monitor runs with tandem_run_wait and tasks with tandem_task_wait. Briefly relay meaningful progress and surface questions without provider jargon. Review isolated evidence before claiming completion. Never apply a task or run automatically to the user's checkout.`;
 
 const server = new McpServer(
   {
@@ -92,7 +92,7 @@ server.registerTool(
   {
     title: "Wait for Tandem discussion room",
     description:
-      "Wait up to 30 seconds for a contribution, manual-input checkpoint, failure, or final synthesis.",
+      "Coalesce room progress server-side for up to 30 seconds and return on a manual-input checkpoint, failure, cancellation, final synthesis, or timeout. Call again without asking the user while the room is still running.",
     inputSchema: {
       room_id: z.string().min(1),
       after_event_id: z.number().int().nonnegative().optional(),
@@ -100,10 +100,15 @@ server.registerTool(
     },
     annotations: { readOnlyHint: true },
   },
-  async ({ room_id, after_event_id, timeout_seconds }) =>
-    toolResult(
-      await service.waitForDeliberationRoom(room_id, after_event_id ?? 0, timeout_seconds ?? 25)
-    )
+  async ({ room_id, after_event_id, timeout_seconds }) => {
+    const cursor = after_event_id ?? 0;
+    return toolResult(
+      compactRoomWait(
+        await service.waitForDeliberationRoom(room_id, cursor, timeout_seconds ?? 25, true),
+        cursor
+      )
+    );
+  }
 );
 
 server.registerTool(
@@ -520,6 +525,29 @@ function toolResult(value: unknown): {
         text: JSON.stringify(value, null, 2),
       },
     ],
+  };
+}
+
+function compactRoomWait(snapshot: DeliberationSnapshot, cursor: number): unknown {
+  const { room, contributions, events } = snapshot;
+  return {
+    room: {
+      id: room.id,
+      status: room.status,
+      currentStage: room.currentStage,
+      currentRound: room.currentRound,
+      synthesis: room.synthesis,
+      error: room.error,
+    },
+    progress: {
+      completed: contributions.filter((item) => item.status === "completed").length,
+      expected: room.participants.length * room.rounds + 1,
+    },
+    latest_event_id: events.at(-1)?.id ?? cursor,
+    events,
+    awaitingInput: contributions
+      .filter((item) => item.status === "awaiting_input")
+      .map(({ profileId, prompt, error }) => ({ profileId, prompt, error })),
   };
 }
 
