@@ -220,13 +220,14 @@ export class TandemService {
   async waitForDeliberationRoom(
     roomId: string,
     afterEventId = 0,
-    timeoutSeconds = 25
+    timeoutSeconds = 25,
+    untilTerminal = false
   ): Promise<DeliberationSnapshot> {
     const deadline = Date.now() + Math.min(Math.max(timeoutSeconds, 0), 30) * 1_000;
     while (true) {
       const snapshot = this.getDeliberationRoom(roomId, afterEventId);
       if (
-        snapshot.events.length > 0 ||
+        (!untilTerminal && snapshot.events.length > 0) ||
         ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) ||
         Date.now() >= deadline
       ) {
@@ -253,6 +254,7 @@ export class TandemService {
     content: string
   ): Promise<DeliberationSnapshot> {
     const room = new DeliberationRunner(this.store).contribute(roomId, profileId, content);
+    if (room.status !== "planned") return this.getDeliberationRoom(room.id);
     const pid = await launchDeliberationRunner(room.id);
     this.store.appendDeliberationEvent(room.id, null, "room.supervisor.resumed", {
       pid,

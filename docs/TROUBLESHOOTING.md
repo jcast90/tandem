@@ -82,6 +82,9 @@ git rev-parse --show-toplevel
 
 Commit, stash, or intentionally discard your existing changes yourself before
 retrying. Tandem will not hide or move a dirty working tree automatically.
+Normal chat and discussion rooms do not require Git; if a room refuses to start
+for that reason, update Tandem and restart the outer chat so it reloads the MCP
+instructions.
 
 ## cmux or tmux did not open
 

@@ -219,7 +219,7 @@ async function setup(): Promise<void> {
   };
   await saveConfig(config);
   console.log(`\nSaved ${configPath()}`);
-  console.log("Run `tandem doctor`, then `tandem chat` inside a clean Git repository.");
+  console.log("Run `tandem doctor`, then `tandem chat` in any readable directory.");
 }
 
 async function doctor(): Promise<void> {

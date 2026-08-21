@@ -74,7 +74,6 @@ async function invokeCodex(input: DiscussionInvocation): Promise<DiscussionResul
       cwd: input.projectRoot,
       env: sanitizeWorkerEnv(process.env),
       stdin: input.prompt,
-      timeoutMs: 30 * 60 * 1_000,
     });
     if (result.exitCode !== 0) {
       throw new Error(result.stderr.trim() || `Codex exited with code ${result.exitCode}.`);
@@ -96,7 +95,6 @@ async function invokeOllama(input: DiscussionInvocation): Promise<DiscussionResu
     cwd: input.projectRoot,
     env: { ...sanitizeWorkerEnv(process.env), OLLAMA_NOHISTORY: "1" },
     stdin: input.prompt,
-    timeoutMs: 30 * 60 * 1_000,
   });
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.trim() || `Ollama exited with code ${result.exitCode}.`);
@@ -126,7 +124,6 @@ async function invokeClaude(input: DiscussionInvocation): Promise<DiscussionResu
     cwd: input.projectRoot,
     env: sanitizeWorkerEnv(process.env),
     stdin: input.prompt,
-    timeoutMs: 30 * 60 * 1_000,
   });
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.trim() || `Claude exited with code ${result.exitCode}.`);

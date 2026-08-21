@@ -14569,7 +14569,8 @@ var TaskRoutingRuleSchema = external_exports.object({
 });
 var DeliberationParticipantSchema = external_exports.object({
   profileId: external_exports.string().min(1),
-  model: external_exports.string().min(1).nullable().default(null)
+  model: external_exports.string().min(1).nullable().default(null),
+  fallbackModels: external_exports.array(external_exports.string().min(1)).max(4).optional()
 });
 var DELIBERATION_ROOM_PRESETS = [
   "general",
@@ -15070,9 +15071,11 @@ async function runCommand(command2, args2, options = {}) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let forceKill;
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
+      forceKill = setTimeout(() => child.kill("SIGKILL"), 1e3);
     }, options.timeoutMs ?? 3e5);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -15082,10 +15085,12 @@ async function runCommand(command2, args2, options = {}) {
     });
     child.on("error", (error51) => {
       clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
       reject(error51);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
       if (timedOut) {
         reject(new Error(`Command timed out: ${command2}`));
         return;
@@ -15596,7 +15601,7 @@ import { mkdir as mkdir3 } from "node:fs/promises";
 import { join as join5, resolve as resolve2 } from "node:path";
 import { spawn as spawn5 } from "node:child_process";
 function defaultRunnerEntry(argvEntry = process.argv[1]) {
-  return argvEntry && !argvEntry.endsWith(".ts") ? resolve2(argvEntry) : join5(packageRoot(), "dist", "cli.js");
+  return argvEntry && !argvEntry.endsWith(".ts") && !argvEntry.match(/mcp-server\.(?:js|mjs)$/) ? resolve2(argvEntry) : join5(packageRoot(), "dist", "cli.js");
 }
 var CMUX_CANDIDATES = [
   "/Applications/cmux.app/Contents/Resources/bin/cmux",
@@ -16186,6 +16191,7 @@ var TandemStore = class {
       DeliberationContributionStatusSchema.parse(patch.status);
       add("status", patch.status);
     }
+    if (patch.model !== void 0) add("model", patch.model);
     if (patch.content !== void 0) add("content", patch.content);
     if (patch.providerSessionId !== void 0) add("provider_session_id", patch.providerSessionId);
     if (patch.usage !== void 0)
@@ -17682,8 +17688,7 @@ async function invokeCodex(input2) {
     const result = await runCommand(executable, args2, {
       cwd: input2.projectRoot,
       env: sanitizeWorkerEnv(process.env),
-      stdin: input2.prompt,
-      timeoutMs: 30 * 60 * 1e3
+      stdin: input2.prompt
     });
     if (result.exitCode !== 0) {
       throw new Error(result.stderr.trim() || `Codex exited with code ${result.exitCode}.`);
@@ -17703,8 +17708,7 @@ async function invokeOllama(input2) {
   const result = await runCommand(executable, ["run", model, "--hidethinking"], {
     cwd: input2.projectRoot,
     env: { ...sanitizeWorkerEnv(process.env), OLLAMA_NOHISTORY: "1" },
-    stdin: input2.prompt,
-    timeoutMs: 30 * 60 * 1e3
+    stdin: input2.prompt
   });
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.trim() || `Ollama exited with code ${result.exitCode}.`);
@@ -17732,8 +17736,7 @@ async function invokeClaude(input2) {
   const result = await runCommand(executable, args2, {
     cwd: input2.projectRoot,
     env: sanitizeWorkerEnv(process.env),
-    stdin: input2.prompt,
-    timeoutMs: 30 * 60 * 1e3
+    stdin: input2.prompt
   });
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.trim() || `Claude exited with code ${result.exitCode}.`);
@@ -17763,6 +17766,58 @@ function isObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// src/provider-failures.ts
+var QUOTA_PATTERNS = [
+  /usage limit/i,
+  /rate limit/i,
+  /quota (?:exceeded|exhausted)/i,
+  /too many requests/i,
+  /credit balance/i,
+  /reached (?:your|the) limit/i,
+  /tokens? (?:exhausted|limit)/i
+];
+var UNAVAILABLE_PATTERNS = [
+  /connection refused/i,
+  /service unavailable/i,
+  /temporarily unavailable/i,
+  /overloaded/i,
+  /capacity/i,
+  /timed? out/i
+];
+var AUTH_PATTERNS = [
+  /not authenticated/i,
+  /login required/i,
+  /authentication failed/i,
+  /unauthorized/i,
+  /invalid (?:api )?key/i
+];
+var INVALID_REQUEST_PATTERNS = [
+  /invalid request/i,
+  /malformed/i,
+  /unsupported (?:model|option|transport)/i,
+  /unknown model/i
+];
+function classifyProviderFailure(error51) {
+  const message = error51 instanceof Error ? error51.message : String(error51);
+  if (QUOTA_PATTERNS.some((pattern) => pattern.test(message))) return "quota_exhausted";
+  if (UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "temporarily_unavailable";
+  }
+  if (AUTH_PATTERNS.some((pattern) => pattern.test(message))) return "authentication";
+  if (INVALID_REQUEST_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "invalid_request";
+  }
+  return "unknown";
+}
+function shouldFallbackProviderFailure(error51) {
+  const kind = classifyProviderFailure(error51);
+  return kind === "quota_exhausted" || kind === "temporarily_unavailable";
+}
+function nextFallbackProfileId(currentProfileId, fallbackProfileIds, attemptedProfileIds) {
+  const attempted = /* @__PURE__ */ new Set([...attemptedProfileIds, currentProfileId]);
+  return fallbackProfileIds.find((profileId) => !attempted.has(profileId)) ?? null;
+}
+
 // src/deliberation-runner.ts
 var DeliberationRunner = class {
   constructor(store, options = {}) {
@@ -17781,6 +17836,20 @@ var DeliberationRunner = class {
     for (const stage of plan.stages) {
       room = this.requireRoom(room.id);
       if (room.status === "canceled") return room;
+      const unavailable = unavailableProfiles(this.store.listDeliberationContributions(room.id));
+      const profileIds = stage.kind === "synthesis" ? synthesisProfiles(room, config2, unavailable).slice(0, 1) : stage.profileIds.filter((profileId) => !unavailable.has(profileId));
+      if (profileIds.length < (stage.kind === "synthesis" ? 1 : 2)) {
+        const error51 = "The room no longer has enough available participants to continue.";
+        this.store.updateDeliberationRoom(room.id, { status: "failed", error: error51 });
+        this.store.appendDeliberationEvent(room.id, null, "room.failed", { error: error51 });
+        return this.requireRoom(room.id);
+      }
+      if (stage.kind === "synthesis" && profileIds[0] !== room.chairProfileId) {
+        this.store.appendDeliberationEvent(room.id, null, "room.chair.reassigned", {
+          fromProfileId: room.chairProfileId,
+          toProfileId: profileIds[0]
+        });
+      }
       this.store.updateDeliberationRoom(room.id, {
         status: "running",
         currentStage: stage.kind,
@@ -17789,10 +17858,10 @@ var DeliberationRunner = class {
       this.store.appendDeliberationEvent(room.id, null, "round.started", {
         stage: stage.kind,
         round: stage.round,
-        participantCount: stage.profileIds.length
+        participantCount: profileIds.length
       });
-      const results = await Promise.all(
-        stage.profileIds.map(async (profileId) => {
+      await Promise.all(
+        profileIds.map(async (profileId) => {
           const participant = room.participants.find((item) => item.profileId === profileId);
           const profile = resolveProfile(config2, profileId);
           const prompt = this.buildPrompt(room, stage.kind, stage.round, profileId);
@@ -17809,18 +17878,33 @@ var DeliberationRunner = class {
             room,
             profile,
             participant?.model ?? profile.model,
+            participant?.fallbackModels ?? [],
             contribution
           );
         })
       );
       room = this.requireRoom(room.id);
       if (room.status === "canceled") return room;
-      if (results.includes("failed")) {
-        const failed = this.store.listDeliberationContributions(room.id).find((item) => item.status === "failed");
-        const error51 = failed?.error ?? "A room contribution failed.";
+      const stageContributions = this.store.listDeliberationContributions(room.id).filter(
+        (item) => item.stage === stage.kind && item.round === stage.round && profileIds.includes(item.profileId)
+      );
+      const completed = stageContributions.filter((item) => item.status === "completed");
+      const awaitingInput = stageContributions.filter((item) => item.status === "awaiting_input");
+      const failed = stageContributions.filter((item) => item.status === "failed");
+      if (stage.kind !== "synthesis" && completed.length + awaitingInput.length < 2) {
+        const error51 = "Fewer than two room participants completed or can complete this round.";
         this.store.updateDeliberationRoom(room.id, { status: "failed", error: error51 });
-        this.store.appendDeliberationEvent(room.id, failed?.id ?? null, "room.failed", { error: error51 });
+        this.store.appendDeliberationEvent(room.id, failed[0]?.id ?? null, "room.failed", {
+          error: error51
+        });
         return this.requireRoom(room.id);
+      }
+      if (failed.length > 0) {
+        this.store.appendDeliberationEvent(room.id, null, "round.degraded", {
+          stage: stage.kind,
+          round: stage.round,
+          failedProfileIds: failed.map((item) => item.profileId)
+        });
       }
       const estimatedTokens = estimateRoomTokens(this.store.listDeliberationContributions(room.id));
       this.store.appendDeliberationEvent(room.id, null, "room.budget.updated", {
@@ -17836,11 +17920,19 @@ var DeliberationRunner = class {
         });
         return this.requireRoom(room.id);
       }
-      if (results.includes("awaiting_input")) {
+      if (awaitingInput.length > 0) {
         this.store.updateDeliberationRoom(room.id, { status: "awaiting_input" });
         this.store.appendDeliberationEvent(room.id, null, "room.awaiting_input", {
           stage: stage.kind,
           round: stage.round
+        });
+        return this.requireRoom(room.id);
+      }
+      if (stage.kind === "synthesis" && !completed[0]?.content) {
+        const error51 = "The chair completed without a persisted synthesis.";
+        this.store.updateDeliberationRoom(room.id, { status: "failed", error: error51 });
+        this.store.appendDeliberationEvent(room.id, failed[0]?.id ?? null, "room.failed", {
+          error: error51
         });
         return this.requireRoom(room.id);
       }
@@ -17849,17 +17941,9 @@ var DeliberationRunner = class {
         round: stage.round
       });
       if (stage.kind === "synthesis") {
-        const synthesis = this.store.listDeliberationContributions(room.id).find(
-          (item) => item.stage === "synthesis" && item.round === stage.round && item.profileId === room.chairProfileId
-        )?.content;
-        if (!synthesis) {
-          const error51 = "The chair completed without a persisted synthesis.";
-          this.store.updateDeliberationRoom(room.id, { status: "failed", error: error51 });
-          return this.requireRoom(room.id);
-        }
         this.store.updateDeliberationRoom(room.id, {
           status: "completed",
-          synthesis,
+          synthesis: completed[0].content,
           error: null
         });
         this.store.appendDeliberationEvent(room.id, null, "room.completed", {});
@@ -17886,7 +17970,7 @@ var DeliberationRunner = class {
       round: contribution.round,
       source: "manual"
     });
-    return this.store.updateDeliberationRoom(room.id, { status: "planned", error: null });
+    return room.status === "awaiting_input" ? this.store.updateDeliberationRoom(room.id, { status: "planned", error: null }) : this.requireRoom(room.id);
   }
   cancel(roomId) {
     const room = this.requireRoom(roomId);
@@ -17900,7 +17984,7 @@ var DeliberationRunner = class {
     this.store.appendDeliberationEvent(room.id, null, "room.canceled", {});
     return canceled;
   }
-  async invokeContribution(room, profile, model, contribution) {
+  async invokeContribution(room, profile, model, fallbackModels, contribution) {
     this.store.updateDeliberationContribution(contribution.id, {
       status: "running",
       error: null
@@ -17910,59 +17994,80 @@ var DeliberationRunner = class {
       stage: contribution.stage,
       round: contribution.round
     });
-    try {
-      const result = await (this.options.invoke ?? invokeDiscussion)({
-        roomId: room.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        profile,
-        model,
-        projectRoot: room.projectRoot,
-        prompt: contribution.prompt
-      });
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "completed",
-        content: result.content,
-        providerSessionId: result.providerSessionId,
-        usage: result.usage,
-        error: null
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
-        profileId: profile.id,
-        stage: contribution.stage,
-        round: contribution.round,
-        source: "provider"
-      });
-      return "completed";
-    } catch (error51) {
-      if (error51 instanceof InteractiveDiscussionRequired) {
-        this.store.updateDeliberationContribution(contribution.id, {
-          status: "awaiting_input",
-          error: error51.message
+    const models = modelCandidates(model, fallbackModels, profile.settings.fallbackModels);
+    for (const [index, candidate] of models.entries()) {
+      try {
+        const result = await (this.options.invoke ?? invokeDiscussion)({
+          roomId: room.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          profile,
+          model: candidate,
+          projectRoot: room.projectRoot,
+          prompt: contribution.prompt
         });
-        this.store.appendDeliberationEvent(
-          room.id,
-          contribution.id,
-          "contribution.awaiting_input",
-          {
-            profileId: profile.id,
-            stage: contribution.stage,
-            round: contribution.round
-          }
-        );
-        return "awaiting_input";
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "completed",
+          model: candidate,
+          content: result.content,
+          providerSessionId: result.providerSessionId,
+          usage: result.usage,
+          error: null
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.completed", {
+          profileId: profile.id,
+          stage: contribution.stage,
+          round: contribution.round,
+          source: "provider",
+          model: candidate
+        });
+        return "completed";
+      } catch (error51) {
+        if (error51 instanceof InteractiveDiscussionRequired) {
+          this.store.updateDeliberationContribution(contribution.id, {
+            status: "awaiting_input",
+            error: error51.message
+          });
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.awaiting_input",
+            {
+              profileId: profile.id,
+              stage: contribution.stage,
+              round: contribution.round
+            }
+          );
+          return "awaiting_input";
+        }
+        const nextModel = models[index + 1];
+        if (nextModel !== void 0 && shouldFallbackProviderFailure(error51)) {
+          this.store.appendDeliberationEvent(
+            room.id,
+            contribution.id,
+            "contribution.model_fallback",
+            {
+              profileId: profile.id,
+              fromModel: candidate,
+              toModel: nextModel,
+              reason: classifyProviderFailure(error51)
+            }
+          );
+          continue;
+        }
+        const message = error51 instanceof Error ? error51.message : String(error51);
+        this.store.updateDeliberationContribution(contribution.id, {
+          status: "failed",
+          error: message
+        });
+        this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
+          profileId: profile.id,
+          error: message
+        });
+        return "failed";
       }
-      const message = error51 instanceof Error ? error51.message : String(error51);
-      this.store.updateDeliberationContribution(contribution.id, {
-        status: "failed",
-        error: message
-      });
-      this.store.appendDeliberationEvent(room.id, contribution.id, "contribution.failed", {
-        profileId: profile.id,
-        error: message
-      });
-      return "failed";
     }
+    return "failed";
   }
   buildPrompt(room, stage, round, profileId) {
     const alias = stage === "synthesis" ? "the chair" : participantAlias(room, profileId);
@@ -18067,6 +18172,26 @@ function participantAlias(room, profileId) {
 }
 function isTerminal(status2) {
   return ["completed", "failed", "canceled"].includes(status2);
+}
+function modelCandidates(model, roomFallbacks, profileFallbacks) {
+  const configured = Array.isArray(profileFallbacks) ? profileFallbacks.filter(
+    (candidate) => typeof candidate === "string" && candidate.length > 0
+  ) : [];
+  return [model, ...roomFallbacks, ...configured].filter(
+    (candidate, index, candidates) => candidates.indexOf(candidate) === index
+  );
+}
+function unavailableProfiles(contributions) {
+  return new Set(
+    contributions.filter(
+      (item) => item.status === "failed" && item.error && classifyProviderFailure(item.error) !== "unknown"
+    ).map((item) => item.profileId)
+  );
+}
+function synthesisProfiles(room, config2, unavailable) {
+  return [room.chairProfileId, ...room.participants.map((item) => item.profileId)].filter(
+    (profileId, index, profileIds) => profileIds.indexOf(profileId) === index && !unavailable.has(profileId) && resolveProfile(config2, profileId).settings.interactiveOnly !== true
+  );
 }
 function estimateRoomTokens(contributions) {
   return contributions.reduce((total, contribution) => {
@@ -18241,11 +18366,11 @@ var TandemService = class {
   listDeliberationRooms(limit = 50) {
     return this.store.listDeliberationRooms(limit);
   }
-  async waitForDeliberationRoom(roomId, afterEventId = 0, timeoutSeconds = 25) {
+  async waitForDeliberationRoom(roomId, afterEventId = 0, timeoutSeconds = 25, untilTerminal = false) {
     const deadline = Date.now() + Math.min(Math.max(timeoutSeconds, 0), 30) * 1e3;
     while (true) {
       const snapshot = this.getDeliberationRoom(roomId, afterEventId);
-      if (snapshot.events.length > 0 || ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) || Date.now() >= deadline) {
+      if (!untilTerminal && snapshot.events.length > 0 || ["awaiting_input", "completed", "failed", "canceled"].includes(snapshot.room.status) || Date.now() >= deadline) {
         return snapshot;
       }
       await new Promise((resolve5) => setTimeout(resolve5, 300));
@@ -18263,6 +18388,7 @@ var TandemService = class {
   }
   async contributeToDeliberationRoom(roomId, profileId, content) {
     const room = new DeliberationRunner(this.store).contribute(roomId, profileId, content);
+    if (room.status !== "planned") return this.getDeliberationRoom(room.id);
     const pid = await launchDeliberationRunner(room.id);
     this.store.appendDeliberationEvent(room.id, null, "room.supervisor.resumed", {
       pid,
@@ -18542,58 +18668,6 @@ function terminateProcessGroup(pid) {
 function buildTaskKey() {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[-:TZ.]/g, "").slice(0, 14);
   return `${timestamp}-${randomBytes(3).toString("hex")}`;
-}
-
-// src/provider-failures.ts
-var QUOTA_PATTERNS = [
-  /usage limit/i,
-  /rate limit/i,
-  /quota (?:exceeded|exhausted)/i,
-  /too many requests/i,
-  /credit balance/i,
-  /reached (?:your|the) limit/i,
-  /tokens? (?:exhausted|limit)/i
-];
-var UNAVAILABLE_PATTERNS = [
-  /connection refused/i,
-  /service unavailable/i,
-  /temporarily unavailable/i,
-  /overloaded/i,
-  /capacity/i,
-  /timed? out/i
-];
-var AUTH_PATTERNS = [
-  /not authenticated/i,
-  /login required/i,
-  /authentication failed/i,
-  /unauthorized/i,
-  /invalid (?:api )?key/i
-];
-var INVALID_REQUEST_PATTERNS = [
-  /invalid request/i,
-  /malformed/i,
-  /unsupported (?:model|option|transport)/i,
-  /unknown model/i
-];
-function classifyProviderFailure(error51) {
-  const message = error51 instanceof Error ? error51.message : String(error51);
-  if (QUOTA_PATTERNS.some((pattern) => pattern.test(message))) return "quota_exhausted";
-  if (UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))) {
-    return "temporarily_unavailable";
-  }
-  if (AUTH_PATTERNS.some((pattern) => pattern.test(message))) return "authentication";
-  if (INVALID_REQUEST_PATTERNS.some((pattern) => pattern.test(message))) {
-    return "invalid_request";
-  }
-  return "unknown";
-}
-function shouldFallbackProviderFailure(error51) {
-  const kind = classifyProviderFailure(error51);
-  return kind === "quota_exhausted" || kind === "temporarily_unavailable";
-}
-function nextFallbackProfileId(currentProfileId, fallbackProfileIds, attemptedProfileIds) {
-  const attempted = /* @__PURE__ */ new Set([...attemptedProfileIds, currentProfileId]);
-  return fallbackProfileIds.find((profileId) => !attempted.has(profileId)) ?? null;
 }
 
 // src/worker.ts
@@ -19007,7 +19081,7 @@ async function setup() {
   await saveConfig(config2);
   console.log(`
 Saved ${configPath()}`);
-  console.log("Run `tandem doctor`, then `tandem chat` inside a clean Git repository.");
+  console.log("Run `tandem doctor`, then `tandem chat` in any readable directory.");
 }
 async function doctor() {
   const config2 = await loadConfig();

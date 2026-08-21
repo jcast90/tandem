@@ -837,6 +837,7 @@ export class TandemStore {
     id: string,
     patch: Partial<{
       status: DeliberationContributionStatus;
+      model: string | null;
       content: string | null;
       providerSessionId: string | null;
       usage: Record<string, unknown> | null;
@@ -853,6 +854,7 @@ export class TandemStore {
       DeliberationContributionStatusSchema.parse(patch.status);
       add("status", patch.status);
     }
+    if (patch.model !== undefined) add("model", patch.model);
     if (patch.content !== undefined) add("content", patch.content);
     if (patch.providerSessionId !== undefined) add("provider_session_id", patch.providerSessionId);
     if (patch.usage !== undefined)

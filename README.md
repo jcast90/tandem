@@ -33,7 +33,7 @@ local build is required.
 
 | Requirement                                                                   | Version                | Why it is needed                                    |
 | ----------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------- |
-| [Git](https://git-scm.com/downloads)                                          | Current                | Isolated worker branches and worktrees              |
+| [Git](https://git-scm.com/downloads)                                          | Current                | Only for modifying workers and execution runs       |
 | [Node.js](https://nodejs.org/)                                                | 22.13 or newer         | Tandem CLI and built-in SQLite ledger               |
 | [Codex CLI](https://developers.openai.com/codex/cli)                          | Current, authenticated | Default conversation, planning, and review provider |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started) | Current, authenticated | Default implementation worker                       |
@@ -77,12 +77,15 @@ tandem setup
 tandem doctor
 ```
 
-Then start Tandem inside a clean Git repository:
+Then start Tandem in any readable directory:
 
 ```bash
-cd ~/projects/my-app
+cd ~/Documents/reference-material
 tandem chat
 ```
+
+Normal chat and discussion rooms do not require Git. Only modifying worker
+delegation and execution runs require a clean Git repository.
 
 For contributor builds, release operations, uninstalling, and platform notes,
 see [Installation](docs/INSTALL.md). For common first-run problems, see
@@ -208,12 +211,14 @@ the corresponding CLI's configured default remains authoritative.
 
 ## First run
 
-Start in a clean Git repository:
+Start in any readable directory:
 
 ```bash
-cd ~/projects/my-app
+cd ~/Documents/reference-material
 tandem chat
 ```
+
+Use a clean Git repository only when asking Tandem to delegate modifying work.
 
 You can also seed the outer conversation:
 
@@ -324,6 +329,21 @@ The `--rounds` option overrides the JSON definition for that invocation. You can
 also persist the choice as `"rounds": 5` in the room file. More rounds multiply
 provider usage, so room definitions should set a deliberate
 `maxEstimatedTokens` budget for expensive discussions.
+
+Each participant can set an ordered same-provider model fallback chain. Tandem
+only advances the chain for quota or temporary availability failures and saves
+the model that actually completed the contribution:
+
+```json
+{
+  "profileId": "outer-primary",
+  "model": "preferred-model",
+  "fallbackModels": ["second-choice", "third-choice"]
+}
+```
+
+The same list may be saved as `settings.fallbackModels` on a profile to apply to
+every room using that profile.
 
 Codex, Claude, and Ollama turns execute concurrently inside each round. Each
 prompt, response, provider session ID, reported usage object, lifecycle event,
