@@ -226,6 +226,120 @@ describe("provider-neutral deliberation rooms", () => {
     service.close();
   });
 
+  it("continues with quorum and reassigns an unavailable chair", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-room-quorum-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const room = store.createDeliberationRoom({
+      projectRoot: root,
+      question: "Reach a useful answer despite one exhausted provider.",
+      participants: [
+        { profileId: "outer-primary", model: null },
+        { profileId: "worker-primary", model: null },
+        { profileId: "local-muse-glimmer", model: null },
+      ],
+      chairProfileId: "outer-primary",
+      rounds: 2,
+      maxEstimatedTokens: 100_000,
+      preserveDissent: true,
+    });
+    const invocations: DiscussionInvocation[] = [];
+    const runner = new DeliberationRunner(store, {
+      loadConfig: async () => DEFAULT_CONFIG,
+      invoke: async (input) => {
+        invocations.push(input);
+        if (input.profile.id === "outer-primary") throw new Error("Usage limit reached.");
+        return {
+          content:
+            input.stage === "synthesis"
+              ? "## Shared conclusions\nQuorum reached a useful answer."
+              : `${input.profile.id} ${input.stage} response`,
+          providerSessionId: null,
+          usage: null,
+        };
+      },
+    });
+
+    const result = await runner.run(room.id);
+
+    expect(result.status).toBe("completed");
+    expect(invocations.filter((item) => item.profile.id === "outer-primary")).toHaveLength(1);
+    expect(invocations.find((item) => item.stage === "synthesis")?.profile.id).toBe(
+      "worker-primary"
+    );
+    expect(store.listDeliberationEvents(room.id).map((event) => event.type)).toContain(
+      "room.chair.reassigned"
+    );
+    store.close();
+  });
+
+  it("accepts early manual input without scheduling duplicate contributions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tandem-room-manual-race-"));
+    cleanup.push(root);
+    const store = new TandemStore(join(root, "state.sqlite"));
+    const room = store.createDeliberationRoom({
+      projectRoot: root,
+      question: "Combine automated and manual contributions.",
+      participants: [
+        { profileId: "outer-primary", model: null },
+        { profileId: "worker-primary", model: null },
+        { profileId: "fallback-freebuff", model: null },
+      ],
+      chairProfileId: "outer-primary",
+      rounds: 1,
+      maxEstimatedTokens: 100_000,
+      preserveDissent: true,
+    });
+    let releaseWorker!: () => void;
+    const workerGate = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    const invocations: DiscussionInvocation[] = [];
+    const runner = new DeliberationRunner(store, {
+      loadConfig: async () => DEFAULT_CONFIG,
+      invoke: async (input) => {
+        invocations.push(input);
+        if (input.profile.id === "fallback-freebuff") {
+          throw new InteractiveDiscussionRequired(input.profile.id);
+        }
+        if (input.profile.id === "worker-primary" && input.stage === "independent") {
+          await workerGate;
+        }
+        return {
+          content:
+            input.stage === "synthesis"
+              ? "## Shared conclusions\nManual input was included."
+              : `${input.profile.id} response`,
+          providerSessionId: null,
+          usage: null,
+        };
+      },
+    });
+
+    const running = runner.run(room.id);
+    let manualReady = false;
+    for (let attempt = 0; attempt < 100 && !manualReady; attempt += 1) {
+      manualReady = store
+        .listDeliberationContributions(room.id)
+        .some((item) => item.profileId === "fallback-freebuff" && item.status === "awaiting_input");
+      if (manualReady) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(manualReady).toBe(true);
+    expect(runner.contribute(room.id, "fallback-freebuff", "Manual response").status).toBe(
+      "running"
+    );
+    releaseWorker();
+
+    expect((await running).status).toBe("completed");
+    expect(
+      invocations.filter(
+        (item) => item.profile.id === "worker-primary" && item.stage === "independent"
+      )
+    ).toHaveLength(1);
+    store.close();
+  });
+
   it("gives five-round rooms distinct challenge, learning, and falsification prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-room-five-round-"));
     cleanup.push(root);

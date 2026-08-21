@@ -254,6 +254,7 @@ export class TandemService {
     content: string
   ): Promise<DeliberationSnapshot> {
     const room = new DeliberationRunner(this.store).contribute(roomId, profileId, content);
+    if (room.status !== "planned") return this.getDeliberationRoom(room.id);
     const pid = await launchDeliberationRunner(room.id);
     this.store.appendDeliberationEvent(room.id, null, "room.supervisor.resumed", {
       pid,

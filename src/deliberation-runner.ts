@@ -18,6 +18,7 @@ import {
   invokeDiscussion,
   type DiscussionInvoker,
 } from "./providers/discussion.js";
+import { classifyProviderFailure } from "./provider-failures.js";
 import { TandemStore } from "./store.js";
 
 export class DeliberationRunner {
@@ -41,6 +42,23 @@ export class DeliberationRunner {
     for (const stage of plan.stages) {
       room = this.requireRoom(room.id);
       if (room.status === "canceled") return room;
+      const unavailable = unavailableProfiles(this.store.listDeliberationContributions(room.id));
+      const profileIds =
+        stage.kind === "synthesis"
+          ? synthesisProfiles(room, config, unavailable).slice(0, 1)
+          : stage.profileIds.filter((profileId) => !unavailable.has(profileId));
+      if (profileIds.length < (stage.kind === "synthesis" ? 1 : 2)) {
+        const error = "The room no longer has enough available participants to continue.";
+        this.store.updateDeliberationRoom(room.id, { status: "failed", error });
+        this.store.appendDeliberationEvent(room.id, null, "room.failed", { error });
+        return this.requireRoom(room.id);
+      }
+      if (stage.kind === "synthesis" && profileIds[0] !== room.chairProfileId) {
+        this.store.appendDeliberationEvent(room.id, null, "room.chair.reassigned", {
+          fromProfileId: room.chairProfileId,
+          toProfileId: profileIds[0],
+        });
+      }
       this.store.updateDeliberationRoom(room.id, {
         status: "running",
         currentStage: stage.kind,
@@ -49,11 +67,11 @@ export class DeliberationRunner {
       this.store.appendDeliberationEvent(room.id, null, "round.started", {
         stage: stage.kind,
         round: stage.round,
-        participantCount: stage.profileIds.length,
+        participantCount: profileIds.length,
       });
 
-      const results = await Promise.all(
-        stage.profileIds.map(async (profileId) => {
+      await Promise.all(
+        profileIds.map(async (profileId) => {
           const participant = room.participants.find((item) => item.profileId === profileId);
           const profile = resolveProfile(config, profileId);
           const prompt = this.buildPrompt(room, stage.kind, stage.round, profileId);
@@ -77,14 +95,31 @@ export class DeliberationRunner {
 
       room = this.requireRoom(room.id);
       if (room.status === "canceled") return room;
-      if (results.includes("failed")) {
-        const failed = this.store
-          .listDeliberationContributions(room.id)
-          .find((item) => item.status === "failed");
-        const error = failed?.error ?? "A room contribution failed.";
+      const stageContributions = this.store
+        .listDeliberationContributions(room.id)
+        .filter(
+          (item) =>
+            item.stage === stage.kind &&
+            item.round === stage.round &&
+            profileIds.includes(item.profileId)
+        );
+      const completed = stageContributions.filter((item) => item.status === "completed");
+      const awaitingInput = stageContributions.filter((item) => item.status === "awaiting_input");
+      const failed = stageContributions.filter((item) => item.status === "failed");
+      if (stage.kind !== "synthesis" && completed.length + awaitingInput.length < 2) {
+        const error = "Fewer than two room participants completed or can complete this round.";
         this.store.updateDeliberationRoom(room.id, { status: "failed", error });
-        this.store.appendDeliberationEvent(room.id, failed?.id ?? null, "room.failed", { error });
+        this.store.appendDeliberationEvent(room.id, failed[0]?.id ?? null, "room.failed", {
+          error,
+        });
         return this.requireRoom(room.id);
+      }
+      if (failed.length > 0) {
+        this.store.appendDeliberationEvent(room.id, null, "round.degraded", {
+          stage: stage.kind,
+          round: stage.round,
+          failedProfileIds: failed.map((item) => item.profileId),
+        });
       }
       const estimatedTokens = estimateRoomTokens(this.store.listDeliberationContributions(room.id));
       this.store.appendDeliberationEvent(room.id, null, "room.budget.updated", {
@@ -100,11 +135,20 @@ export class DeliberationRunner {
         });
         return this.requireRoom(room.id);
       }
-      if (results.includes("awaiting_input")) {
+      if (awaitingInput.length > 0) {
         this.store.updateDeliberationRoom(room.id, { status: "awaiting_input" });
         this.store.appendDeliberationEvent(room.id, null, "room.awaiting_input", {
           stage: stage.kind,
           round: stage.round,
+        });
+        return this.requireRoom(room.id);
+      }
+
+      if (stage.kind === "synthesis" && !completed[0]?.content) {
+        const error = "The chair completed without a persisted synthesis.";
+        this.store.updateDeliberationRoom(room.id, { status: "failed", error });
+        this.store.appendDeliberationEvent(room.id, failed[0]?.id ?? null, "room.failed", {
+          error,
         });
         return this.requireRoom(room.id);
       }
@@ -114,22 +158,9 @@ export class DeliberationRunner {
         round: stage.round,
       });
       if (stage.kind === "synthesis") {
-        const synthesis = this.store
-          .listDeliberationContributions(room.id)
-          .find(
-            (item) =>
-              item.stage === "synthesis" &&
-              item.round === stage.round &&
-              item.profileId === room.chairProfileId
-          )?.content;
-        if (!synthesis) {
-          const error = "The chair completed without a persisted synthesis.";
-          this.store.updateDeliberationRoom(room.id, { status: "failed", error });
-          return this.requireRoom(room.id);
-        }
         this.store.updateDeliberationRoom(room.id, {
           status: "completed",
-          synthesis,
+          synthesis: completed[0]!.content,
           error: null,
         });
         this.store.appendDeliberationEvent(room.id, null, "room.completed", {});
@@ -160,7 +191,9 @@ export class DeliberationRunner {
       round: contribution.round,
       source: "manual",
     });
-    return this.store.updateDeliberationRoom(room.id, { status: "planned", error: null });
+    return room.status === "awaiting_input"
+      ? this.store.updateDeliberationRoom(room.id, { status: "planned", error: null })
+      : this.requireRoom(room.id);
   }
 
   cancel(roomId: string): DeliberationRoomRecord {
@@ -371,6 +404,32 @@ function participantAlias(room: DeliberationRoomRecord, profileId: string): stri
 
 function isTerminal(status: DeliberationRoomRecord["status"]): boolean {
   return ["completed", "failed", "canceled"].includes(status);
+}
+
+function unavailableProfiles(contributions: DeliberationContributionRecord[]): Set<string> {
+  return new Set(
+    contributions
+      .filter(
+        (item) =>
+          item.status === "failed" &&
+          item.error &&
+          classifyProviderFailure(item.error) !== "unknown"
+      )
+      .map((item) => item.profileId)
+  );
+}
+
+function synthesisProfiles(
+  room: DeliberationRoomRecord,
+  config: TandemConfig,
+  unavailable: Set<string>
+): string[] {
+  return [room.chairProfileId, ...room.participants.map((item) => item.profileId)].filter(
+    (profileId, index, profileIds) =>
+      profileIds.indexOf(profileId) === index &&
+      !unavailable.has(profileId) &&
+      resolveProfile(config, profileId).settings.interactiveOnly !== true
+  );
 }
 
 function estimateRoomTokens(contributions: DeliberationContributionRecord[]): number {
